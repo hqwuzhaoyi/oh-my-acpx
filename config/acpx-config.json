@@ -1,0 +1,47 @@
+{
+  "$schema": "https://raw.githubusercontent.com/openclaw/acpx/main/config.schema.json",
+  
+  "defaultAgent": "codex",
+  "defaultPermissions": "approve-all",
+  "nonInteractivePermissions": "deny",
+  "authPolicy": "skip",
+  "ttl": 300,
+  
+  "agents": {
+    "trae": {
+      "command": "trae-cli acp serve",
+      "description": "ByteDance Trae - fastest, Chinese optimized"
+    }
+  },
+  
+  "categories": {
+    "ultrabrain": {
+      "agent": "claude",
+      "description": "Complex architecture, deep reasoning"
+    },
+    "deep": {
+      "agent": "claude",
+      "description": "Multi-file refactoring, complex logic"
+    },
+    "visual-engineering": {
+      "agent": "trae",
+      "description": "Frontend UI, CSS, prototypes"
+    },
+    "standard": {
+      "agent": "codex",
+      "description": "Regular development, CRUD, APIs"
+    },
+    "quick": {
+      "agent": "trae",
+      "description": "Single file, small changes"
+    },
+    "writing": {
+      "agent": "trae",
+      "description": "Documentation, comments"
+    },
+    "explore": {
+      "agent": "codex",
+      "description": "Code search, research"
+    }
+  }
+}
