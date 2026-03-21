@@ -93,6 +93,22 @@ cp -r skills/acp-orchestrator ~/.agents/skills/
 }
 ```
 
+**完整配置指南**: 见 [docs/acpx-agent-config.md](docs/acpx-agent-config.md)
+
+### 内置 vs 自定义 Agent
+
+| Agent | 内置? | 需要配置? |
+|---|---|---|
+| claude | ✅ | ❌ |
+| codex | ✅ | ❌ |
+| gemini | ✅ | ❌ |
+| copilot | ✅ | ❌ |
+| kimi | ✅ | ❌ |
+| qwen | ✅ | ❌ |
+| cursor | ✅ | ❌ |
+| **trae** | ❌ | ✅ 需要 |
+| **pi** | ❌ | ✅ 需要 |
+
 ### Agent 能力对比
 
 | 特性 | trae | codex | claude |
