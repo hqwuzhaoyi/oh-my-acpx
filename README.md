@@ -172,8 +172,20 @@ oh-my-acpx/
 │   └── waterfall-task.md     # 瀑布模式示例
 └── docs/
     ├── agents.md             # Agent 详细对比
-    └── best-practices.md     # 最佳实践指南
+    ├── best-practices.md     # 最佳实践指南
+    └── acp-relay-fallback.md # streamTo=parent 卡住时的兜底方案
 ```
+
+## Relay Fallback（重要）
+
+如果 `streamTo: "parent"` 只收到 `start + stall`，请走兜底：
+
+```bash
+node scripts/relay-fallback.js --stream-log <spawn返回的streamLogPath>
+```
+
+然后直接用 `childSessionKey` 拉 `sessions_history` 回传结果。
+
 
 ## 致谢
 
