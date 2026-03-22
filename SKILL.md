@@ -9,9 +9,83 @@ description: Multi-agent task orchestration using OpenClaw ACP runtime. Automati
 
 ## 核心原则
 
-1. **streamTo: "parent"** - 必须！否则收不到结果
-2. **能力匹配** - 复杂任务给强 agent，简单任务给快 agent
-3. **并行优于串行** - 独立任务同时执行
+1. **混合运行时策略** — 规划/调研用 `subagent`（可见性稳定），编码用 `acp`（能力更强）
+2. **能力匹配** — 复杂任务给强 agent，简单任务给快 agent
+3. **并行优于串行** — 独立任务同时执行
+4. **强制兜底** — ACP 任务 75s 无输出则自动走 child 结果回捞，绝不黑洞等待
+
+## 运行时路由策略（关键）
+
+根据任务类型自动选择最稳定的运行时：
+
+| 任务类型 | 运行时 | 原因 |
+|---|---|---|
+| 规划/调研/汇总 (ultrabrain, deep, explore, writing) | `subagent` | 完成通告稳定可靠 |
+| 编码/重构/修改 (standard, quick, visual-engineering) | `acp` + `streamTo:"parent"` | coding harness 能力更强 |
+
+### 降级链路（ACP 失败时）
+
+```
+acp + streamTo:parent
+    │ 75s 无 assistant delta
+    ▼
+child 结果回捞 (sessions_history / acpx stream log)
+    │ 回捞失败
+    ▼
+direct acpx (acpx --approve-all --timeout 90 <agent> exec)
+    │ 也失败
+    ▼
+subagent (降级：仅产出方案，不直接执行改动)
+```
+
+### ACP 兜底操作流程（内联执行，无需外部脚本）
+
+当使用 `runtime: "acp"` 时，你必须按以下步骤处理 relay stall：
+
+**Step 1: spawn 并 yield**
+```json
+// spawn 返回 streamLogPath 和 childSessionKey
+const spawnResult = sessions_spawn({
+  runtime: "acp", agentId: "<agent>", mode: "run",
+  streamTo: "parent", task: "<task>"
+})
+sessions_yield({ message: "等待 agent 完成" })
+```
+
+**Step 2: 检查 yield 结果**
+- 如果 `sessions_yield` 正常返回了 agent 输出 → 直接使用，流程结束
+- 如果返回显示 stall / 无输出 / 超时 → 进入 Step 3
+
+**Step 3: child 结果回捞**
+读取 spawn 返回的 `streamLogPath`（位于 `~/.openclaw/agents/<agent>/sessions/<id>.acp-stream.jsonl`）：
+- 检查是否有 `:done` 事件 → 如有，说明 relay 其实成功了，提取结果
+- 如果只有 `:start` + `:stall` → child 可能已完成但 relay 断了
+- 用 `sessions_history(childSessionKey)` 拉取 child session 的完整对话历史
+- 如果拿到了 assistant 输出 → 使用它作为结果，告知用户"已通过兜底回捞获取结果"
+
+**Step 4: direct acpx 降级**（Step 3 也无结果时）
+```bash
+acpx --approve-all --timeout 90 <agent> exec "<task>"
+```
+
+**Step 5: subagent 降级**（Step 4 也失败时）
+```json
+sessions_spawn({ runtime: "subagent", agentId: "<agent>", task: "<task>" })
+```
+注意：subagent 降级后可能只能产出方案，不直接执行代码改动。
+
+### 诊断工具（可选，人工调试用）
+
+如需独立诊断 relay 状态，可使用 scripts 目录下的工具：
+```bash
+# 一次性诊断
+node scripts/relay-fallback.js --stream-log <path>
+# 实时监控
+node scripts/relay-fallback.js --watch --stream-log <path> --timeout 75
+# 路由查询
+node scripts/runtime-router.js --category <category>
+```
+这些脚本仅用于人工调试，orchestrator agent 不依赖它们。
 
 ## Agent 能力分层
 
@@ -71,15 +145,36 @@ description: Multi-agent task orchestration using OpenClaw ACP runtime. Automati
 
 ## 使用模式
 
+### 模式 0：混合路由（推荐默认）
+
+```json
+// 规划阶段 → subagent（完成通告稳定）
+sessions_spawn({
+  runtime: "subagent",
+  agentId: "claude",
+  task: "分析需求，设计架构，输出实现计划"
+})
+sessions_yield({})
+
+// 编码阶段 → acp（能力更强）+ 兜底
+sessions_spawn({
+  runtime: "acp",
+  agentId: "codex",
+  mode: "run",
+  streamTo: "parent",
+  task: "实现后端 API"
+})
+// 并行启动 relay watch：
+// node scripts/relay-fallback.js --watch --stream-log <streamLogPath> --timeout 75
+```
+
 ### 模式 1：按能力选择单 agent
 
 ```json
-// 复杂架构 → claude
+// 复杂架构 → claude（subagent 运行时，稳定可见）
 sessions_spawn({
-  runtime: "acp",
+  runtime: "subagent",
   agentId: "claude",
-  mode: "run",
-  streamTo: "parent",
   task: "重构整个认证系统，支持 OAuth2、JWT、Session 三种模式"
 })
 
@@ -252,20 +347,25 @@ sessions_spawn({
 
 ## 注意事项
 
-1. **不要用 trae 做复杂架构** - 能力不足，会出错
-2. **不要用 claude 做简单任务** - 浪费资源，速度慢
-3. **中文需求优先 trae** - 字节出品，中文优化
-4. **并发控制** - 同时运行 2-4 个 agent 较合适
-5. **权限** - 确保 `--approve-all` 或配置默认权限
+1. **规划类用 subagent，编码类用 acp** — 混合策略是当前最稳定方案
+2. **ACP relay stall 时走兜底** — 按 Step 2→3→4→5 逐级降级，绝不黑洞等待
+3. **不要用 trae 做复杂架构** - 能力不足，会出错
+4. **不要用 claude 做简单任务** - 浪费资源，速度慢
+5. **中文需求优先 trae** - 字节出品，中文优化
+6. **并发控制** - 同时运行 2-4 个 agent 较合适
+7. **权限** - 确保 `--approve-all` 或配置默认权限
+8. **降级不恐慌** — relay stall 是可见性问题，不是执行问题，child 通常已完成
 
 ## 错误处理
 
 | 问题 | 原因 | 解决 |
 |---|---|---|
+| ACP relay 只有 start+stall | 父级可见性链路断裂 | 按兜底流程 Step 3: sessions_history(childSessionKey) 回捞 |
 | agent 输出质量差 | 能力不匹配 | 升级到更强 agent |
 | 执行超时 | 任务太复杂 | 拆分任务或换 agent |
 | 权限被拒 | 没有配置 | 加 `--approve-all` |
 | spawn 失败 | agentId 错误 | 检查配置 |
+| relay fallback 也无结果 | child 也失败 | 按兜底流程 Step 4→5 逐级降级 |
 
 ## 配置参考
 

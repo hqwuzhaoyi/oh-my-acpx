@@ -28,6 +28,8 @@
 - 🔄 **瀑布模式** - 先规划后执行
 - 📊 **对比验证** - 多 agent 做同一任务，选最优
 - 🇨🇳 **中文优化** - trae 对中文需求特别优化
+- 🛡️ **混合运行时** - 规划用 subagent（稳定），编码用 acp（强），自动降级
+- 🔁 **Relay 兜底** - ACP 超时自动回捞 child 结果，杜绝黑洞等待
 
 ## 类别路由
 
@@ -146,10 +148,12 @@ sessions_yield({ message: "等待 agent 完成" })
 
 ### ✅ 推荐做法
 
+- **混合运行时** - 规划/调研用 `subagent`，编码用 `acp`（详见报告）
 - **匹配能力** - 复杂任务用 claude，简单任务用 trae
 - **并行独立任务** - 前后端分离、多模块同时开发
 - **中文需求用 trae** - 字节出品，中文优化
 - **先规划后执行** - 瀑布模式确保方向正确
+- **配 relay 兜底** - ACP 任务必须配 `relay-fallback.js --watch`
 
 ### ❌ 避免做法
 
@@ -157,6 +161,7 @@ sessions_yield({ message: "等待 agent 完成" })
 - 用 claude 做简单单文件修改
 - 串行执行独立任务
 - 忘记设置 `streamTo: "parent"`
+- ACP 任务不配兜底，导致黑洞等待
 
 ## 项目结构
 
@@ -165,7 +170,11 @@ oh-my-acpx/
 ├── README.md                 # 本文件
 ├── SKILL.md                  # Skill 定义（用于 OpenClaw）
 ├── config/
-│   └── acpx-config.json      # acpx 配置示例
+│   ├── acpx-config.json      # acpx 基础配置
+│   └── acpx-config-full.json # acpx 完整配置（含路由分类）
+├── scripts/
+│   ├── relay-fallback.js     # ACP relay 兜底工具（inspect + watch 模式）
+│   └── runtime-router.js     # 运行时路由引擎
 ├── examples/
 │   ├── quick-task.md         # quick 任务示例
 │   ├── parallel-task.md      # 并行任务示例
@@ -173,18 +182,57 @@ oh-my-acpx/
 └── docs/
     ├── agents.md             # Agent 详细对比
     ├── best-practices.md     # 最佳实践指南
-    └── acp-relay-fallback.md # streamTo=parent 卡住时的兜底方案
+    ├── acp-relay-fallback.md # streamTo=parent 卡住时的兜底方案
+    └── runtime-stability-research-report-2026-03-22.md  # 运行时稳定性调研报告
 ```
+
+## 架构说明
+
+```
+OpenClaw core → acpx plugin (extension) → acpx CLI → ACP JSON-RPC → coding agent
+                     ↑
+              ~/.openclaw/extensions/acpx/
+```
+
+**集成方式**：路由和兜底逻辑内联在 SKILL.md 中，作为 orchestrator agent 的行为指令。
+Agent 读取 skill 后自动执行混合路由 + 降级链路，无需外部脚本依赖，完全兼容 OpenClaw 官方插件体系。
+
+`scripts/` 目录下的工具仅用于**人工调试**和**独立诊断**，不是运行时依赖。
 
 ## Relay Fallback（重要）
 
-如果 `streamTo: "parent"` 只收到 `start + stall`，请走兜底：
+orchestrator agent 会自动处理 ACP relay stall（逻辑内联在 SKILL.md 中）：
+1. `sessions_yield` 返回 stall → 自动用 `sessions_history(childSessionKey)` 回捞
+2. 回捞失败 → 降级 direct acpx
+3. 再失败 → 降级 subagent
+
+### 人工调试工具（scripts/）
+
+如果需要独立诊断 relay 状态：
+
+#### 一次性诊断
 
 ```bash
-node scripts/relay-fallback.js --stream-log <spawn返回的streamLogPath>
+node scripts/relay-fallback.js --stream-log <streamLogPath>
 ```
 
-然后直接用 `childSessionKey` 拉 `sessions_history` 回传结果。
+#### 实时监控 + 自动兜底
+
+```bash
+node scripts/relay-fallback.js --watch --stream-log <streamLogPath> --timeout 75
+```
+
+自动在 75s 后从 child session 回捞结果。返回 `fallback_success` 表示成功回捞，`fallback_no_child_result` 表示需要进一步降级。
+
+#### 运行时路由查询
+
+```bash
+node scripts/runtime-router.js --category standard
+# → { runtime: "acp", agentId: "codex", fallbackChain: ["acp","direct_acpx","subagent"], ... }
+
+node scripts/runtime-router.js --category ultrabrain
+# → { runtime: "subagent", agentId: "claude", ... }
+```
 
 
 ## 致谢
