@@ -225,24 +225,47 @@ sessions_spawn({
 sessions_yield({ message: "等待所有 agent 完成" })
 ```
 
-### 模式 3：瀑布式（先规划后执行）
+### 模式 3：瀑布式（多轮编排）
 
-```json
-// Step 1: 规划（claude）
-sessions_spawn({
-  runtime: "acp",
-  agentId: "claude",
-  streamTo: "parent",
-  task: "分析需求，设计架构，输出实现计划"
-})
+> ⚠️ 单 turn 无法完成"规划 + 等待 + 执行"的完整流程（T6 验证）。
+> 必须使用**多 turn 编排**：持久 session 或自调度循环。
 
-// 等待完成后...
-sessions_yield({})
+**方式 A：持久 session（推荐）**
 
-// Step 2: 执行（根据任务复杂度分配）
-// 简单任务 → trae
-// 中等任务 → codex
-// 复杂任务 → claude
+使用相同的 `--session-id`，在多个 turn 之间保持上下文：
+
+```bash
+SID="waterfall-$(date +%s)"
+
+# Turn 1: 规划
+openclaw agent --agent claude --session-id "$SID" \
+  --message "分析需求，设计架构，输出实现计划。完成后输出 PLAN_COMPLETE。" \
+  --json --timeout 120
+
+# Turn 2: 执行（agent 已知 Turn 1 的规划内容）
+openclaw agent --agent claude --session-id "$SID" \
+  --message "规划已完成。用 sessions_spawn 分派子任务：
+复杂 → claude (acp), 中等 → codex (acp), 简单 → trae (acp)。
+并行 spawn，然后 sessions_yield 等待。" \
+  --json --timeout 300
+```
+
+**方式 B：自调度循环（全自动）**
+
+Agent 每 turn 只做一步，输出 `NEXT_STEP:` 标记，外部脚本自动触发下一轮：
+
+```bash
+SID="waterfall-auto-$(date +%s)"
+MSG="你是编排器。瀑布任务：Step 1 规划 → Step 2 分派编码 → Step 3 汇总。
+每 turn 只做一步，完成后输出 NEXT_STEP: <下一步>。全部完成后输出 ALL_DONE。
+现在执行 Step 1。"
+
+for turn in $(seq 1 5); do
+  OUT=$(openclaw agent --agent claude --session-id "$SID" \
+    --message "$MSG" --json --timeout 180)
+  echo "$OUT" | grep -q "ALL_DONE" && echo "Done in $turn turns" && break
+  echo "$OUT" | grep -q "NEXT_STEP" && MSG="继续执行 NEXT_STEP。" || break
+done
 ```
 
 ### 模式 4：对比验证（同任务多 agent）
