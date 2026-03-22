@@ -21,6 +21,9 @@ npm-debug.log*
 .env
 .env.local
 
+# Test results
+test-results/
+
 # Temporary
 *.tmp
 *.swp
