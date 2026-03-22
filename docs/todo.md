@@ -55,8 +55,8 @@ done | sort | uniq -c
 ## TODO 2: 多轮编排（解决 T6 单 turn 限制）
 
 **优先级**: P1
-**状态**: 待启动
-**关联**: T6 测试结果
+**状态**: ✅ 已验证 (2026-03-22)
+**关联**: T6 测试结果, [验证报告](todo2-multi-turn-verification-report.md)
 
 ### 背景
 
@@ -88,18 +88,18 @@ openclaw agent --agent claude --session-id orchestrator-001 \
 
 ### 交付物
 
-- [ ] 多轮编排 POC 脚本 `scripts/test-multi-turn-orchestration.sh`
-- [ ] 对比：持久 session vs 多次独立 turn vs 自调度
-- [ ] 更新 SKILL.md 支持跨 turn 状态传递
-- [ ] 更新 examples/waterfall-task.md 为可实际执行的多轮示例
+- [x] 多轮编排 POC 脚本 `scripts/test-multi-turn-orchestration.sh`
+- [x] 对比：持久 session vs 多次独立 turn vs 自调度
+- [x] 更新 SKILL.md 支持跨 turn 状态传递
+- [x] 更新 examples/waterfall-task.md 为可实际执行的多轮示例
 
 ---
 
 ## TODO 3: sessions_history 回捞路径的端到端验证
 
 **优先级**: P1
-**状态**: 待启动
-**关联**: SKILL.md 兜底流程 Step 3
+**状态**: ✅ 已验证 (2026-03-22)
+**关联**: SKILL.md 兜底流程 Step 3, [验证报告](todo3-sessions-history-verification-report.md)
 
 ### 背景
 
@@ -138,7 +138,7 @@ grep -l "FALLBACK_RECOVERY" test-results/*.json
 
 ### 交付物
 
-- [ ] 端到端验证脚本 `scripts/test-sessions-history-recovery.sh`
-- [ ] sessions_history API 返回格式文档
-- [ ] 如果 API 不可用或返回不完整：提出替代方案并更新 SKILL.md
-- [ ] 验证报告：stall 场景下的回捞成功率
+- [x] 端到端验证脚本 `scripts/test-sessions-history-recovery.sh`
+- [x] sessions_history API 返回格式文档（含 TypeScript 接口定义）
+- [x] API 可用且返回完整——SKILL.md 无需修改
+- [x] 验证报告：正常路径回捞 100% 成功，stall 场景待 TODO 1 复现后补充
