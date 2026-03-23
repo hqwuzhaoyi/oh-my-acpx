@@ -61,7 +61,12 @@ openclaw skills list | grep acp-orchestrator
 
 ### 配置 acpx（如需自定义 agent）
 
-内置 agent（claude / codex / gemini）无需额外配置。如需添加 trae 等自定义 agent：
+内置 agent（claude / codex / gemini）无需额外配置。`trae` 是否内置取决于 acpx 版本：
+
+- 较旧版本：需要在 `~/.acpx/config.json` 手动添加 `agents.trae`
+- 新版本（含 Trae built-in）：可直接 `acpx trae ...`
+
+如需添加 trae-cli 或其他自定义 agent：
 
 ```bash
 # 复制配置模板
@@ -132,7 +137,28 @@ acp + streamTo:parent → child 结果回捞 → direct acpx → subagent
 | Agent | 内置 | 需要配置 |
 |---|---|---|
 | claude / codex / gemini / copilot / kimi / qwen / cursor | ✅ | ❌ |
-| **trae** / **pi** | ❌ | ✅ 需要在 `~/.acpx/config.json` 中配置 |
+| **trae** | 版本相关（旧版❌ / 新版✅） | 旧版需在 `~/.acpx/config.json` 配置，详见 `docs/acpx-agent-config.md` |
+| **pi** | ❌ | ✅ 需要在 `~/.acpx/config.json` 中配置 |
+
+### Trae CLI 快速配置（兼容写法）
+
+如果你所在环境的 acpx 还未内置 `trae`，加上这段即可：
+
+```json
+{
+  "agents": {
+    "trae": {
+      "command": "trae-cli acp serve"
+    }
+  }
+}
+```
+
+验证命令：
+
+```bash
+acpx --approve-all trae exec "Reply exactly: TRAE_OK"
+```
 
 ## 项目结构
 

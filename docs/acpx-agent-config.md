@@ -253,7 +253,12 @@ acpx iflow "你的任务"
 
 ### Trae CLI (ByteDance)
 
-**需要手动配置**，因为 acpx 未内置。
+Trae 的配置与 acpx 版本有关：
+
+- **稳定版 acpx（当前多数环境）**：通常需要手动配置 `agents.trae`
+- **包含 Trae built-in 的分支/新版本**：可直接 `acpx trae ...`，无需手动配置
+
+#### A) 稳定版 acpx：手动配置（推荐兼容写法）
 
 ```json
 // ~/.acpx/config.json
@@ -265,6 +270,10 @@ acpx iflow "你的任务"
   }
 }
 ```
+
+#### B) built-in 版本 acpx：可选清理
+
+当你确认所用 acpx 已内置 `trae -> trae-cli acp serve` 后，`agents.trae` 可删除。
 
 **前置要求**:
 ```bash
@@ -350,7 +359,7 @@ acpx --agent "./bin/my-agent" "任务"
 }
 ```
 
-**无需配置 agents**，所有内置 agent 都可用。
+**无需配置 agents**，所有内置 agent 都可用（`trae` 是否内置取决于 acpx 版本，见下方示例 2）。
 
 ---
 
@@ -432,7 +441,12 @@ acpx --agent "./bin/my-agent" "任务"
 
 ### Q: 为什么 acpx trae 报错 "Failed to spawn agent: trae"？
 
-**A**: trae 不是内置 agent，需要手动配置：
+**A**: 常见是两种原因：
+
+1. 你使用的 acpx 版本还未内置 `trae`
+2. `trae-cli` 不在 PATH 中
+
+先用兼容配置兜底：
 
 ```json
 {
@@ -442,6 +456,13 @@ acpx --agent "./bin/my-agent" "任务"
     }
   }
 }
+```
+
+并确认：
+
+```bash
+which trae-cli
+trae-cli acp --help
 ```
 
 ---
@@ -518,7 +539,7 @@ acpx claude "任务"
 |---|---|---|---|---|---|
 | **claude** | ✅ | `npx @zed-industries/claude-agent-acp` | ⭐⭐⭐⭐⭐ | ⚡ | ❌ |
 | **codex** | ✅ | `npx @zed-industries/codex-acp` | ⭐⭐⭐ | ⚡⚡ | ❌ |
-| **trae** | ❌ | `trae-cli acp serve` | ⭐⭐ | ⚡⚡⚡ | ✅ |
+| **trae** | 版本相关（旧版❌ / 新版✅） | `trae-cli acp serve` | ⭐⭐ | ⚡⚡⚡ | ✅ |
 | **gemini** | ✅ | `gemini --acp` | ⭐⭐⭐⭐ | ⚡⚡ | ❌ |
 | **copilot** | ✅ | `copilot --acp --stdio` | ⭐⭐⭐ | ⚡⚡ | ❌ |
 | **kimi** | ✅ | `kimi acp` | ⭐⭐⭐ | ⚡⚡ | ✅ |
