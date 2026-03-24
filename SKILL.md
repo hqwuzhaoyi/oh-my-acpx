@@ -1,6 +1,6 @@
 ---
 name: acp-orchestrator
-description: "Multi-agent task orchestration using OpenClaw ACP runtime. Automatically analyzes requirements, splits tasks, and dispatches to the best agent (trae/claude/codex). Use when: (1) user requests multi-step coding tasks, (2) complex requirements need parallel processing, (3) comparing outputs from different agents, (4) large projects need task decomposition. Triggers on '用多个agent', '并行处理', '分派任务', 'multi-agent', 'parallel agents', 'orchestrate', 'oh my acpx'."
+description: "Multi-agent task orchestration using OpenClaw ACP runtime. Automatically analyzes requirements, splits tasks, and dispatches to the best agent (trae/claude/codex/gemini). Use when: (1) user requests multi-step coding tasks, (2) complex requirements need parallel processing, (3) comparing outputs from different agents, (4) large projects need task decomposition. Triggers on '用多个agent', '并行处理', '分派任务', 'multi-agent', 'parallel agents', 'orchestrate', 'oh my acpx'."
 ---
 
 # Oh My ACPX - Multi-Agent Orchestration
@@ -100,14 +100,23 @@ node scripts/runtime-router.js --category <category>
 │  - 深度调试                                                   │
 │  - 跨域综合                                                   │
 ├─────────────────────────────────────────────────────────────┤
-│  standard / unspecified                                      │
-│  常规开发、CRUD、API 实现                                     │
+│  standard / explore                                          │
+│  常规开发、CRUD、代码理解、仓库探索                            │
 │  ─────────────────────────────────────────────────────────  │
-│  codex (中等)                                                │
+│  codex (稳健)                                                │
 │  - 常规功能开发                                               │
 │  - API 实现                                                   │
 │  - 测试编写                                                   │
 │  - 代码审查                                                   │
+├─────────────────────────────────────────────────────────────┤
+│  visual-engineering / writing                                │
+│  前端 UI、文档整理、说明文写作                                │
+│  ─────────────────────────────────────────────────────────  │
+│  gemini (表达/视觉强)                                         │
+│  - 前端页面与样式                                             │
+│  - 文档润色与整理                                             │
+│  - 资料归纳                                                   │
+│  - 多模态辅助                                                 │
 ├─────────────────────────────────────────────────────────────┤
 │  quick                                                       │
 │  简单文件、快速原型、小修改                                    │
@@ -126,22 +135,23 @@ node scripts/runtime-router.js --category <category>
 |---|---|---|---|
 | **ultrabrain** | 复杂架构、深度推理 | claude | codex |
 | **deep** | 多文件重构、复杂逻辑 | claude | codex |
-| **visual-engineering** | 前端 UI、CSS | trae | claude |
+| **visual-engineering** | 前端 UI、CSS、交互稿 | gemini | trae |
 | **standard** | 常规开发、CRUD | codex | trae |
 | **quick** | 单文件、小修改 | trae | codex |
-| **writing** | 文档、注释 | trae | codex |
-| **explore** | 代码搜索、调研 | codex | trae |
+| **writing** | 文档、注释、说明文 | gemini | codex |
+| **explore** | 代码搜索、调研 | codex | gemini |
 
 ## Agent 特点对比
 
-| 特性 | trae | codex | claude |
-|---|---|---|---|
-| **能力** | ⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐⭐⭐ |
-| **速度** | ⚡⚡⚡ | ⚡⚡ | ⚡ |
-| **中文优化** | ✅ | ❌ | ❌ |
-| **复杂架构** | ❌ | ⚠️ | ✅ |
-| **快速原型** | ✅ | ✅ | ⚠️ (overkill) |
-| **成本** | 低 | 中 | 高 |
+| 特性 | trae | codex | gemini | claude |
+|---|---|---|---|---|
+| **能力** | ⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐⭐⭐ |
+| **速度** | ⚡⚡⚡ | ⚡⚡ | ⚡⚡ | ⚡ |
+| **中文优化** | ✅ | ❌ | ✅ | ❌ |
+| **复杂架构** | ❌ | ⚠️ | ⚠️ | ✅ |
+| **快速原型** | ✅ | ✅ | ✅ | ⚠️ (overkill) |
+| **文档整理/UI 表达** | ⚠️ | ✅ | ✅✅ | ✅ |
+| **成本** | 低 | 中 | 中 | 高 |
 
 ## 使用模式
 
@@ -374,10 +384,11 @@ sessions_spawn({
 2. **ACP relay stall 时走兜底** — 按 Step 2→3→4→5 逐级降级，绝不黑洞等待
 3. **不要用 trae 做复杂架构** - 能力不足，会出错
 4. **不要用 claude 做简单任务** - 浪费资源，速度慢
-5. **中文需求优先 trae** - 字节出品，中文优化
-6. **并发控制** - 同时运行 2-4 个 agent 较合适
-7. **权限** - 确保 `--approve-all` 或配置默认权限
-8. **降级不恐慌** — relay stall 是可见性问题，不是执行问题，child 通常已完成
+5. **中文需求优先 trae / gemini** - 前者适合快改，后者适合文档与 UI 表达
+6. **Gemini 适合写和看，不适合扛主架构** - 更适合 visual-engineering、writing、轻调研
+7. **并发控制** - 同时运行 2-4 个 agent 较合适
+8. **权限** - 确保 `--approve-all` 或配置默认权限
+9. **降级不恐慌** — relay stall 是可见性问题，不是执行问题，child 通常已完成
 
 ## 错误处理
 
