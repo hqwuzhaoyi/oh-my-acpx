@@ -1,6 +1,6 @@
 ---
 name: acp-orchestrator
-description: Multi-agent task orchestration using OpenClaw ACP runtime. Automatically analyzes requirements, splits tasks, and dispatches to the best agent (trae/claude/codex). Use when: (1) user requests multi-step coding tasks, (2) complex requirements need parallel processing, (3) comparing outputs from different agents, (4) large projects need task decomposition. Triggers on "用多个agent", "并行处理", "分派任务", "multi-agent", "parallel agents", "orchestrate", "oh my acpx".
+description: "Multi-agent task orchestration using OpenClaw ACP runtime. Automatically analyzes requirements, splits tasks, and dispatches to the best agent (trae/claude/codex). Use when: (1) user requests multi-step coding tasks, (2) complex requirements need parallel processing, (3) comparing outputs from different agents, (4) large projects need task decomposition. Triggers on '用多个agent', '并行处理', '分派任务', 'multi-agent', 'parallel agents', 'orchestrate', 'oh my acpx'."
 ---
 
 # Oh My ACPX - Multi-Agent Orchestration
