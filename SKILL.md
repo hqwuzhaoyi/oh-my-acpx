@@ -401,7 +401,17 @@ sessions_spawn({
   "agents": {
     "trae": {
       "command": "trae-cli acp serve"
+    },
+    "gemini": {
+      "command": "gemini --experimental-acp"
     }
   }
 }
 ```
+
+### Gemini CLI 兼容性
+
+- 对较新的 Gemini CLI，`acpx` 内置映射通常可直接使用 `gemini --acp`
+- 对旧版 Gemini CLI（例如本机 `0.22.x`），ACP 参数可能仍是 `--experimental-acp`
+- 如果 `acpx gemini ...` 报 `Unknown argument: acp`，在 `~/.acpx/config.json` 中覆盖：`"gemini": { "command": "gemini --experimental-acp" }`
+- 如果 Gemini 已在本机完成交互登录，ACP 子进程通常可直接复用登录态；不一定需要额外 API key
