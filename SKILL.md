@@ -9,10 +9,196 @@ description: "Multi-agent task orchestration using OpenClaw ACP runtime. Automat
 
 ## 核心原则
 
-1. **混合运行时策略** — 规划/调研用 `subagent`（可见性稳定），编码用 `acp`（能力更强）
-2. **能力匹配** — 复杂任务给强 agent，简单任务给快 agent
-3. **并行优于串行** — 独立任务同时执行
-4. **强制兜底** — ACP 任务 75s 无输出则自动走 child 结果回捞，绝不黑洞等待
+1. **Plan-Driven** — 先建 plan.json 再动手，持续追踪直到完成
+2. **混合运行时策略** — 规划/调研用 `subagent`（可见性稳定），编码用 `acp`（能力更强）
+3. **能力匹配** — 复杂任务给强 agent，简单任务给快 agent
+4. **并行优于串行** — 独立任务同时执行
+5. **强制兜底** — ACP 任务 75s 无输出则自动走 child 结果回捞，绝不黑洞等待
+
+## 任务追踪（Plan-Driven）
+
+> 任务开始时先建 plan，持续追踪直到完成。类似 [Ralph](https://github.com/snarktank/ralph) 的 prd.json 模式。
+
+### 核心规则
+
+1. **先建 plan 再动手** — 分析完需求后，第一步是创建 `plan.json`，不是直接 spawn agent
+2. **每完成一个 story 就更新** — `status: "pending"` → `"in_progress"` → `"completed"`
+3. **持续追踪直到结束** — 每轮操作前先读 plan.json，找下一个待办 story
+4. **plan.json 存项目根目录** — 所有模式共用同一个文件
+
+### plan.json 结构
+
+```json
+{
+  "project": "博客系统",
+  "createdAt": "2026-03-25T10:00:00Z",
+  "branchName": "feat/blog-system",
+  "status": "in_progress",
+  "stories": [
+    {
+      "id": "S-001",
+      "title": "设计博客系统架构",
+      "description": "设计整体数据模型和 API 接口",
+      "agent": "claude",
+      "category": "deep",
+      "runtime": "subagent",
+      "priority": 1,
+      "status": "pending",
+      "acceptanceCriteria": [
+        "输出数据模型设计",
+        "输出 API 接口定义"
+      ],
+      "result": "",
+      "notes": ""
+    },
+    {
+      "id": "S-002",
+      "title": "实现后端 API",
+      "description": "基于架构设计实现 RESTful API",
+      "agent": "codex",
+      "category": "standard",
+      "runtime": "acp",
+      "priority": 2,
+      "status": "pending",
+      "acceptanceCriteria": [
+        "CRUD 接口可用",
+        "测试通过"
+      ],
+      "result": "",
+      "notes": ""
+    }
+  ],
+  "progress": [
+    {
+      "storyId": "S-001",
+      "timestamp": "2026-03-25T10:05:00Z",
+      "event": "completed",
+      "agent": "claude",
+      "summary": "架构设计完成，输出了数据模型和 API 定义"
+    }
+  ]
+}
+```
+
+**字段说明：**
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `status` (顶层) | `"pending"` / `"in_progress"` / `"completed"` | 整体项目状态 |
+| `stories[].status` | `"pending"` / `"in_progress"` / `"completed"` / `"failed"` | 单个 story 状态 |
+| `stories[].agent` | `"claude"` / `"codex"` / `"trae"` / `"gemini"` | 按能力路由表分配 |
+| `stories[].category` | `"ultrabrain"` / `"deep"` / `"standard"` / `"quick"` / ... | 对应类别路由表 |
+| `stories[].runtime` | `"subagent"` / `"acp"` | 按运行时路由策略选择 |
+| `stories[].priority` | number | 执行顺序，小数优先 |
+| `stories[].acceptanceCriteria` | string[] | 可验证的完成标准 |
+| `progress[]` | array | 追加式事件日志，不删改 |
+
+### 使用流程
+
+```
+用户请求
+    │
+    ▼
+分析需求 → 拆分 stories → 分配 agent/category/runtime
+    │
+    ▼
+创建 plan.json（写入项目根目录）
+    │
+    ▼
+┌─► 读 plan.json → 找最高优先级 pending story
+│       │
+│       ▼
+│   更新 story status → "in_progress"
+│       │
+│       ▼
+│   执行 story（spawn agent / 直接执行）
+│       │
+│       ▼
+│   验证 acceptanceCriteria
+│       │
+│       ├── 通过 → status: "completed"，追加 progress
+│       └── 失败 → status: "failed"，记录 notes，考虑升级 agent
+│       │
+│       ▼
+│   还有 pending stories？
+│       │
+└───── 是 ──┘
+        │
+        否 → 项目 status: "completed"
+```
+
+### 三种模式
+
+#### 模式 A：OpenClaw Session（推荐）
+
+在 OpenClaw 平台内，用 `sessions_spawn` / `sessions_yield` 编排，plan.json 做跨 turn 持久记忆：
+
+```bash
+SID="plan-$(date +%s)"
+
+# Turn 1: 分析需求，创建 plan.json
+openclaw agent --agent claude --session-id "$SID" \
+  --message "分析以下需求，创建 plan.json：<需求描述>。
+按能力路由表分配 agent，按运行时路由策略选 runtime。
+完成后输出 PLAN_CREATED。" \
+  --json --timeout 120
+
+# Turn 2+: 逐个执行 story
+openclaw agent --agent claude --session-id "$SID" \
+  --message "读取 plan.json，找最高优先级 pending story，
+用 sessions_spawn 执行，完成后更新 plan.json。
+全部完成输出 ALL_DONE，否则输出 NEXT_STORY。" \
+  --json --timeout 300
+```
+
+#### 模式 B：Claude Code 内联
+
+在 Claude Code / Gemini CLI 会话中，SKILL.md 指导 agent 自己管理 plan.json：
+
+1. 收到用户需求后，先分析并创建 `plan.json`
+2. 用 `Agent` tool 或 `Bash` 分派子任务给对应 agent
+3. 每完成一个 story，读 plan.json → 更新状态 → 找下一个
+4. 所有 stories 完成后，更新顶层 status 为 `"completed"`
+
+#### 模式 C：acpx CLI 循环（类 Ralph）
+
+外部 bash 脚本驱动，适合无人值守：
+
+```bash
+MAX_ITERATIONS=10
+for i in $(seq 1 $MAX_ITERATIONS); do
+  # 读 plan.json，找下一个 pending story
+  NEXT=$(node -e "
+    const p = require('./plan.json');
+    const s = p.stories.filter(s => s.status === 'pending')
+      .sort((a,b) => a.priority - b.priority)[0];
+    if (s) console.log(JSON.stringify(s));
+    else console.log('DONE');
+  ")
+  [ "$NEXT" = "DONE" ] && echo "All stories completed" && break
+
+  AGENT=$(echo "$NEXT" | jq -r '.agent')
+  TASK=$(echo "$NEXT" | jq -r '.title + ": " + .description')
+  SID=$(echo "$NEXT" | jq -r '.id')
+
+  # 执行
+  acpx --approve-all --timeout 120 "$AGENT" exec "$TASK"
+
+  # 更新 plan.json（用 node 或 jq）
+  node -e "
+    const fs = require('fs');
+    const p = JSON.parse(fs.readFileSync('plan.json'));
+    const s = p.stories.find(s => s.id === '$SID');
+    s.status = 'completed';
+    p.progress.push({
+      storyId: '$SID', timestamp: new Date().toISOString(),
+      event: 'completed', agent: '$AGENT', summary: 'Auto-completed by CLI loop'
+    });
+    if (p.stories.every(s => s.status === 'completed')) p.status = 'completed';
+    fs.writeFileSync('plan.json', JSON.stringify(p, null, 2));
+  "
+done
+```
 
 ## 运行时路由策略（关键）
 
@@ -334,18 +520,23 @@ sessions_yield({ message: "对比三个方案，选择最优" })
 ```
 需求：创建一个博客系统，前端 React，后端 Node.js，带测试
 
-分析：
-- 架构设计 → claude (deep)
-- 后端 API → codex (standard)
-- 前端 UI → trae (visual-engineering)
-- 测试 → codex (standard)
+Step 1: 创建 plan.json
+{
+  "project": "博客系统",
+  "stories": [
+    { "id": "S-001", "title": "设计架构", "agent": "claude", "category": "deep", "priority": 1, "status": "pending" },
+    { "id": "S-002", "title": "实现后端 API", "agent": "codex", "category": "standard", "priority": 2, "status": "pending" },
+    { "id": "S-003", "title": "创建前端组件", "agent": "trae", "category": "quick", "priority": 2, "status": "pending" },
+    { "id": "S-004", "title": "编写测试", "agent": "codex", "category": "standard", "priority": 3, "status": "pending" }
+  ]
+}
 
-执行：
-sessions_spawn({ agentId: "claude", streamTo: "parent", task: "设计博客系统架构" })
-sessions_spawn({ agentId: "codex", streamTo: "parent", task: "实现后端 API" })
-sessions_spawn({ agentId: "trae", streamTo: "parent", task: "创建前端 React 组件" })
-sessions_spawn({ agentId: "codex", streamTo: "parent", task: "编写测试" })
-sessions_yield({})
+Step 2: 按 priority 执行
+- S-001 先执行（priority 1，串行）
+- S-002 + S-003 并行执行（priority 2，独立任务）
+- S-004 最后执行（priority 3，依赖前面的代码）
+
+Step 3: 每完成一个 story，更新 plan.json status
 ```
 
 ### 示例 2：快速原型
@@ -380,15 +571,17 @@ sessions_spawn({
 
 ## 注意事项
 
-1. **规划类用 subagent，编码类用 acp** — 混合策略是当前最稳定方案
-2. **ACP relay stall 时走兜底** — 按 Step 2→3→4→5 逐级降级，绝不黑洞等待
-3. **不要用 trae 做复杂架构** - 能力不足，会出错
-4. **不要用 claude 做简单任务** - 浪费资源，速度慢
-5. **中文需求优先 trae / gemini** - 前者适合快改，后者适合文档与 UI 表达
-6. **Gemini 适合写和看，不适合扛主架构** - 更适合 visual-engineering、writing、轻调研
-7. **并发控制** - 同时运行 2-4 个 agent 较合适
-8. **权限** - 确保 `--approve-all` 或配置默认权限
-9. **降级不恐慌** — relay stall 是可见性问题，不是执行问题，child 通常已完成
+1. **先建 plan.json 再 spawn** — 没有 plan 不允许开始执行
+2. **每完成一个 story 立即更新 plan.json** — 不要攒着批量更新
+3. **规划类用 subagent，编码类用 acp** — 混合策略是当前最稳定方案
+4. **ACP relay stall 时走兜底** — 按 Step 2→3→4→5 逐级降级，绝不黑洞等待
+5. **不要用 trae 做复杂架构** - 能力不足，会出错
+6. **不要用 claude 做简单任务** - 浪费资源，速度慢
+7. **中文需求优先 trae / gemini** - 前者适合快改，后者适合文档与 UI 表达
+8. **Gemini 适合写和看，不适合扛主架构** - 更适合 visual-engineering、writing、轻调研
+9. **并发控制** - 同时运行 2-4 个 agent 较合适
+10. **权限** - 确保 `--approve-all` 或配置默认权限
+11. **降级不恐慌** — relay stall 是可见性问题，不是执行问题，child 通常已完成
 
 ## 错误处理
 
