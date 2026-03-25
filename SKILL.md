@@ -102,6 +102,7 @@ openclaw system event --text "继续执行 plan.json：读取项目根目录的 
       "agent": "claude",
       "category": "deep",
       "runtime": "subagent",
+      "methodology": "brainstorming → writing-plans",
       "priority": 1,
       "status": "pending",
       "acceptanceCriteria": [
@@ -118,6 +119,7 @@ openclaw system event --text "继续执行 plan.json：读取项目根目录的 
       "agent": "codex",
       "category": "standard",
       "runtime": "acp",
+      "methodology": "tdd",
       "priority": 2,
       "status": "pending",
       "acceptanceCriteria": [
@@ -149,6 +151,7 @@ openclaw system event --text "继续执行 plan.json：读取项目根目录的 
 | `stories[].agent` | `"claude"` / `"codex"` / `"trae"` / `"gemini"` | 按能力路由表分配 |
 | `stories[].category` | `"ultrabrain"` / `"deep"` / `"standard"` / `"quick"` / ... | 对应类别路由表 |
 | `stories[].runtime` | `"subagent"` / `"acp"` | 按运行时路由策略选择 |
+| `stories[].methodology` | string | 按方法论路由表选择，见下方"执行方法论层" |
 | `stories[].priority` | number | 执行顺序，小数优先 |
 | `stories[].acceptanceCriteria` | string[] | 可验证的完成标准 |
 | `progress[]` | array | 追加式事件日志，不删改 |
@@ -259,6 +262,128 @@ for i in $(seq 1 $MAX_ITERATIONS); do
   "
 done
 ```
+
+## 执行方法论层（Superpowers）
+
+> 三层架构：编排（plan.json）→ 方法论（superpowers）→ 执行（agent）
+
+每个 story 执行前，orchestrator 必须根据 story 类型选择正确的方法论，并**在 spawn 指令中明确要求 agent 遵循该方法论**。不是可选的建议，是强制执行的流程。
+
+### 方法论路由表
+
+| Story 类型 | methodology 值 | 方法论流程 | 说明 |
+|---|---|---|---|
+| 需求分析/架构设计 | `brainstorming → writing-plans` | 先 brainstorming 探索需求和方案，再 writing-plans 拆实施步骤 | 用于 `explore` / `deep` 类 story |
+| 功能实现/编码 | `tdd` | RED→GREEN→REFACTOR 循环：先写测试，看它失败，再写最小实现 | 用于 `standard` / `quick` 类 story |
+| Bug 修复 | `systematic-debugging → tdd` | 先 systematic-debugging 定位根因，再 TDD 修复 | 用于修复类 story |
+| 重构 | `tdd` | 先补齐测试覆盖现有行为，再重构，保持绿灯 | 用于重构类 story |
+| 文档/写作 | `none` | 直接执行 | 用于 `writing` 类 story |
+| 任何 story 完成时 | `verification-before-completion` | 跑验证命令确认输出，再标 completed | **所有 story 完成前必须执行** |
+
+### 三层架构流程
+
+```
+用户需求
+    │
+    ▼
+┌─────────────────────────────┐
+│  Layer 1: 编排 (plan.json)    │
+│  创建 plan → 拆 stories       │
+│  每个 story 标注 methodology   │
+└─────────────┬───────────────┘
+              │
+              ▼
+┌─────────────────────────────┐
+│  Layer 2: 方法论 (superpowers) │
+│  根据 methodology 字段选择：   │
+│  - brainstorming              │
+│  - writing-plans              │
+│  - tdd                        │
+│  - systematic-debugging       │
+│  - verification               │
+└─────────────┬───────────────┘
+              │
+              ▼
+┌─────────────────────────────┐
+│  Layer 3: 执行 (agent)        │
+│  按能力路由表分配 agent        │
+│  按运行时路由策略选 runtime    │
+└─────────────────────────────┘
+```
+
+### 在 spawn 指令中注入方法论
+
+orchestrator 在 spawn agent 时，**必须在 task 描述中包含方法论要求**。不要期望 agent 自己知道要用什么方法论。
+
+**示例：编码类 story（TDD）**
+```
+sessions_spawn({
+  agentId: "codex",
+  task: "实现用户 CRUD API。
+
+**方法论要求：TDD（test-driven development）**
+1. 先写失败测试（RED）
+2. 写最小代码让测试通过（GREEN）
+3. 重构（REFACTOR）
+4. 完成前运行所有测试确认通过
+
+不要跳过测试直接写实现。"
+})
+```
+
+**示例：设计类 story（brainstorming → writing-plans）**
+```
+sessions_spawn({
+  agentId: "claude",
+  task: "设计博客系统架构。
+
+**方法论要求：brainstorming → writing-plans**
+1. 先探索需求边界和约束
+2. 提出 2-3 种方案，推荐一种
+3. 形成设计文档
+4. 拆成可执行的实施计划
+
+不要直接开始写代码。"
+})
+```
+
+**示例：Bug 修复 story（systematic-debugging → TDD）**
+```
+sessions_spawn({
+  agentId: "claude",
+  task: "修复登录超时问题。
+
+**方法论要求：systematic-debugging → TDD**
+1. 先用 systematic-debugging 定位根因（不要猜，先收集证据）
+2. 定位后，写一个能复现 bug 的失败测试
+3. 最小修复让测试通过
+4. 确认所有现有测试仍然通过"
+})
+```
+
+### 完成验证（所有 story 必须）
+
+**每个 story 标记 `completed` 之前，必须执行 verification-before-completion：**
+
+1. 运行相关测试/构建命令，确认输出
+2. 检查 acceptanceCriteria 是否全部满足
+3. 只有验证通过才能更新 plan.json status 为 `"completed"`
+
+```
+story 执行完毕
+    │
+    ▼
+运行验证命令（测试/构建/lint）
+    │
+    ├── 通过 → 检查 acceptanceCriteria → 全部满足 → status: "completed"
+    │
+    └── 失败 → 修复 → 重新验证（不要跳过直接标完成）
+```
+
+**红线：**
+- ❌ agent 说"已完成"就直接标 completed — 必须有验证证据
+- ❌ 跳过测试直接标完成 — 即使 agent 说"我已经手动验证了"
+- ✅ 运行命令 → 看到绿灯 → 再标 completed
 
 ## 运行时路由策略（关键）
 
@@ -584,19 +709,20 @@ Step 1: 创建 plan.json
 {
   "project": "博客系统",
   "stories": [
-    { "id": "S-001", "title": "设计架构", "agent": "claude", "category": "deep", "priority": 1, "status": "pending" },
-    { "id": "S-002", "title": "实现后端 API", "agent": "codex", "category": "standard", "priority": 2, "status": "pending" },
-    { "id": "S-003", "title": "创建前端组件", "agent": "trae", "category": "quick", "priority": 2, "status": "pending" },
-    { "id": "S-004", "title": "编写测试", "agent": "codex", "category": "standard", "priority": 3, "status": "pending" }
+    { "id": "S-001", "title": "设计架构", "agent": "claude", "category": "deep", "methodology": "brainstorming → writing-plans", "priority": 1, "status": "pending" },
+    { "id": "S-002", "title": "实现后端 API", "agent": "codex", "category": "standard", "methodology": "tdd", "priority": 2, "status": "pending" },
+    { "id": "S-003", "title": "创建前端组件", "agent": "trae", "category": "quick", "methodology": "tdd", "priority": 2, "status": "pending" },
+    { "id": "S-004", "title": "编写测试", "agent": "codex", "category": "standard", "methodology": "tdd", "priority": 3, "status": "pending" }
   ]
 }
 
-Step 2: 按 priority 执行
-- S-001 先执行（priority 1，串行）
-- S-002 + S-003 并行执行（priority 2，独立任务）
-- S-004 最后执行（priority 3，依赖前面的代码）
+Step 2: 按 priority + methodology 执行
+- S-001: brainstorming → writing-plans（先探索方案再拆步骤）
+- S-002 + S-003: TDD 并行执行（先写测试再实现）
+- S-004: TDD（补充集成测试）
+- 每个 story 完成前: verification-before-completion
 
-Step 3: 每完成一个 story，更新 plan.json status
+Step 3: 每完成一个 story，验证 → 更新 plan.json status
 ```
 
 ### 示例 2：快速原型
