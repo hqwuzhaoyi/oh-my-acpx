@@ -23,8 +23,35 @@ description: "Multi-agent task orchestration using OpenClaw ACP runtime. Automat
 
 1. **先建 plan 再动手** — 分析完需求后，第一步是创建 `plan.json`，不是直接 spawn agent
 2. **每完成一个 story 就更新** — `status: "pending"` → `"in_progress"` → `"completed"`
-3. **持续追踪直到结束** — 每轮操作前先读 plan.json，找下一个待办 story
+3. **自动继续，不要停** — 完成一个 story 后，立即读 plan.json 找下一个 pending story 并执行，**不要等用户确认**。只有以下情况才允许停下来问用户：
+   - 所有 stories 都已 `completed`（项目完成）
+   - 当前 story 被阻塞且无法自行解决（如缺少外部输入）
+   - 遇到不可恢复的错误
 4. **plan.json 存项目根目录** — 所有模式共用同一个文件
+
+### 自动循环（关键）
+
+**这是和普通 agent 最大的区别：你必须像 Ralph 一样自驱循环，不是做完一步就停。**
+
+```
+完成 story N
+    │
+    ▼
+更新 plan.json（status: "completed"，追加 progress）
+    │
+    ▼
+读 plan.json → 还有 pending story？
+    │
+    ├── 有 → 立即开始下一个（不要输出"建议下一步做 X"然后等用户说继续）
+    │
+    └── 没有 → 项目 status: "completed"，汇报最终结果
+```
+
+**红线：以下行为是错误的，必须避免：**
+- ❌ "S-001 已完成，建议下一步做 S-002，需要我继续吗？" — 不要问，直接做
+- ❌ "下一步最合理的动作是..." 然后停下 — 不要停，直接执行
+- ❌ 完成分析后只输出建议而不执行 — 你是执行者，不是顾问
+- ✅ "S-001 completed. 继续 S-002..." 然后立即开始执行
 
 ### plan.json 结构
 
@@ -573,7 +600,8 @@ sessions_spawn({
 
 1. **先建 plan.json 再 spawn** — 没有 plan 不允许开始执行
 2. **每完成一个 story 立即更新 plan.json** — 不要攒着批量更新
-3. **规划类用 subagent，编码类用 acp** — 混合策略是当前最稳定方案
+3. **完成 story 后自动继续下一个** — 不要停下来问用户"需要继续吗"，直接执行下一个 pending story。只有全部完成或被阻塞时才停
+4. **规划类用 subagent，编码类用 acp** — 混合策略是当前最稳定方案
 4. **ACP relay stall 时走兜底** — 按 Step 2→3→4→5 逐级降级，绝不黑洞等待
 5. **不要用 trae 做复杂架构** - 能力不足，会出错
 6. **不要用 claude 做简单任务** - 浪费资源，速度慢
