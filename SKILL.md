@@ -162,7 +162,7 @@ openclaw system event --text "继续执行 plan.json：读取项目根目录的 
 用户请求
     │
     ▼
-分析需求 → 拆分 stories → 分配 agent/category/runtime
+分析需求 → 拆分 stories → 分配 agent/category/runtime/methodology
     │
     ▼
 创建 plan.json（写入项目根目录）
@@ -174,20 +174,27 @@ openclaw system event --text "继续执行 plan.json：读取项目根目录的 
 │   更新 story status → "in_progress"
 │       │
 │       ▼
-│   执行 story（spawn agent / 直接执行）
+│   按 methodology 执行 story（注入方法论要求）
 │       │
 │       ▼
 │   验证 acceptanceCriteria
 │       │
-│       ├── 通过 → status: "completed"，追加 progress
-│       └── 失败 → status: "failed"，记录 notes，考虑升级 agent
+│       ├── 失败 → status: "failed"，记录 notes，考虑升级 agent
+│       │
+│       └── 通过 → 编码类 story？
+│                   │
+│                   ├── 是 → spawn reviewer → review 通过？
+│                   │                           ├── 是 → status: "completed"
+│                   │                           └── 否 → 修复 → 重新验证+review
+│                   │
+│                   └── 否 → status: "completed"
 │       │
 │       ▼
-│   还有 pending stories？
+│   追加 progress，还有 pending stories？
 │       │
 └───── 是 ──┘
         │
-        否 → 项目 status: "completed"
+        否 → 生成 retrospective → 项目 status: "completed"
 ```
 
 ### 三种模式
@@ -384,6 +391,77 @@ story 执行完毕
 - ❌ agent 说"已完成"就直接标 completed — 必须有验证证据
 - ❌ 跳过测试直接标完成 — 即使 agent 说"我已经手动验证了"
 - ✅ 运行命令 → 看到绿灯 → 再标 completed
+
+### Code Review（编码类 story 必须）
+
+**每个编码类 story（methodology 含 `tdd`）验证通过后，必须 spawn 一个 reviewer agent 做 code review，通过后才能标 completed。**
+
+```
+story 验证通过
+    │
+    ▼
+spawn reviewer agent（用 codex 或 claude）
+    │
+    ▼
+review 结果？
+    ├── 通过 → status: "completed"
+    └── 不通过 → 原 agent 修复 → 重新验证 → 重新 review
+```
+
+**spawn review 指令模板：**
+```
+sessions_spawn({
+  agentId: "codex",
+  runtime: "subagent",
+  task: "Review 以下代码变更（story S-002: 实现后端 API）。
+
+检查：
+1. 代码是否符合项目现有风格和约定
+2. 是否有明显 bug、安全漏洞、性能问题
+3. 测试覆盖是否充分
+4. 命名和结构是否清晰
+
+如果有问题，列出具体文件和行号，说明问题和建议修复方式。
+如果没有问题，输出 REVIEW_PASSED。"
+})
+```
+
+**规则：**
+- 设计类（brainstorming）、文档类（none）story 跳过 code review
+- reviewer agent 不能是执行该 story 的同一个 agent 实例（避免自己审自己）
+- review 不通过最多重试 2 次，仍不通过则标 `"failed"` 并记录 notes
+
+### 项目复盘（所有 stories 完成后自动执行）
+
+**当 plan.json 所有 stories 都标记 `completed` 后，自动生成复盘追加到 plan.json。**
+
+orchestrator 在标记项目 `status: "completed"` 之前，必须写入 `retrospective` 字段：
+
+```json
+{
+  "status": "completed",
+  "retrospective": {
+    "timestamp": "2026-03-25T12:00:00Z",
+    "summary": "博客系统开发完成，共 4 个 stories，全部通过",
+    "metrics": {
+      "totalStories": 4,
+      "completedOnFirstTry": 3,
+      "requiredReviewFixes": 1,
+      "failedStories": 0
+    },
+    "lessons": [
+      "S-002 的 API 设计在 review 时发现缺少分页，说明 brainstorming 阶段应更细致",
+      "codex 处理前端组件效果良好，无需升级到 claude"
+    ]
+  }
+}
+```
+
+**复盘内容：**
+1. 执行摘要（完成率、重试次数）
+2. 各 story 的 agent 选择是否合适
+3. 方法论是否生效（TDD 是否真的提前发现了问题）
+4. 下次可改进的点
 
 ## 运行时路由策略（关键）
 
