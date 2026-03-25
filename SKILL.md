@@ -53,6 +53,39 @@ description: "Multi-agent task orchestration using OpenClaw ACP runtime. Automat
 - ❌ 完成分析后只输出建议而不执行 — 你是执行者，不是顾问
 - ✅ "S-001 completed. 继续 S-002..." 然后立即开始执行
 
+### 跨 Turn 自调度（飞书/聊天场景必读）
+
+**问题：** 在飞书等聊天场景中，每条用户消息只触发一个 agent turn。如果一个 story 耗尽了当前 turn 的时间/token，agent 会被迫停下，无法自动继续下一个 story。
+
+**解决方案：在 turn 结束前，用 `system event` 给自己发一条消息触发下一轮。**
+
+```bash
+# 在当前 turn 即将结束时执行：
+openclaw system event --text "继续执行 plan.json：读取项目根目录的 plan.json，找最高优先级 pending story，按 acp-orchestrator skill 执行。" --mode now
+```
+
+**执行规则：**
+
+1. 每完成一个 story 后，先更新 plan.json
+2. 检查是否还有 pending stories
+3. 如果有，且当前 turn 还有余量 → 直接在本 turn 继续执行
+4. 如果有，但当前 turn 即将超时或 token 不足 → **必须在回复用户前调用 `system event` 触发下一轮**
+5. 如果没有 → 项目完成，不需要触发
+
+**关键：不要在回复中说"我会继续"然后期望用户来触发。你必须自己触发。**
+
+```
+当前 turn 即将结束
+    │
+    ▼
+还有 pending stories？
+    │
+    ├── 有 → exec: openclaw system event --text "继续 plan.json" --mode now
+    │         然后回复用户："S-001 done, 已触发下一轮继续 S-002"
+    │
+    └── 没有 → 回复用户："所有 stories 完成"
+```
+
 ### plan.json 结构
 
 ```json
