@@ -23,8 +23,8 @@ description: "Multi-agent task orchestration using OpenClaw ACP runtime. Automat
 
 1. **先建 plan 再动手** — 分析完需求后，第一步是创建 `plan.json`，不是直接 spawn agent
 2. **每完成一个 story 就更新** — `status: "pending"` → `"in_progress"` → `"completed"`
-3. **自动继续，不要停** — 完成一个 story 后，立即读 plan.json 找下一个 pending story 并执行，**不要等用户确认**。只有以下情况才允许停下来问用户：
-   - 所有 stories 都已 `completed`（项目完成）
+3. **自动继续，不要停** — 完成一个 story 后，立即读 plan.json 找下一个 `passes: false` 的 story 并执行，**不要等用户确认**。只有以下情况才允许停下来问用户：
+   - 所有 stories 都已 `passes: true`（项目完成）
    - 当前 story 被阻塞且无法自行解决（如缺少外部输入）
    - 遇到不可恢复的错误
 4. **plan.json 存项目根目录** — 所有模式共用同一个文件
@@ -37,14 +37,14 @@ description: "Multi-agent task orchestration using OpenClaw ACP runtime. Automat
 完成 story N
     │
     ▼
-更新 plan.json（status: "completed"，追加 progress）
+更新 plan.json（passes: true）
     │
     ▼
-读 plan.json → 还有 pending story？
+读 plan.json → 还有 passes: false 的 story？
     │
     ├── 有 → 立即开始下一个（不要输出"建议下一步做 X"然后等用户说继续）
     │
-    └── 没有 → 项目 status: "completed"，汇报最终结果
+    └── 没有 → 项目完成，汇报最终结果
 ```
 
 **红线：以下行为是错误的，必须避免：**
@@ -67,7 +67,7 @@ openclaw system event --text "继续执行 plan.json：读取项目根目录的 
 **执行规则：**
 
 1. 每完成一个 story 后，先更新 plan.json
-2. 检查是否还有 pending stories
+2. 检查是否还有 `passes: false` 的 stories
 3. 如果有，且当前 turn 还有余量 → 直接在本 turn 继续执行
 4. 如果有，但当前 turn 即将超时或 token 不足 → **必须在回复用户前调用 `system event` 触发下一轮**
 5. 如果没有 → 项目完成，不需要触发
@@ -78,7 +78,7 @@ openclaw system event --text "继续执行 plan.json：读取项目根目录的 
 当前 turn 即将结束
     │
     ▼
-还有 pending stories？
+还有 passes: false 的 stories？
     │
     ├── 有 → exec: openclaw system event --text "继续 plan.json" --mode now
     │         然后回复用户："S-001 done, 已触发下一轮继续 S-002"
@@ -91,70 +91,50 @@ openclaw system event --text "继续执行 plan.json：读取项目根目录的 
 ```json
 {
   "project": "博客系统",
-  "createdAt": "2026-03-25T10:00:00Z",
   "branchName": "feat/blog-system",
-  "status": "in_progress",
+  "description": "创建博客系统，前端 React，后端 Node.js",
   "stories": [
     {
       "id": "S-001",
       "title": "设计博客系统架构",
-      "description": "设计整体数据模型和 API 接口",
-      "agent": "claude",
-      "category": "deep",
-      "runtime": "subagent",
-      "methodology": "brainstorming → writing-plans",
-      "priority": 1,
-      "status": "pending",
       "acceptanceCriteria": [
         "输出数据模型设计",
         "输出 API 接口定义"
       ],
-      "result": "",
+      "priority": 1,
+      "passes": false,
       "notes": ""
     },
     {
       "id": "S-002",
       "title": "实现后端 API",
-      "description": "基于架构设计实现 RESTful API",
-      "agent": "codex",
-      "category": "standard",
-      "runtime": "acp",
-      "methodology": "tdd",
-      "priority": 2,
-      "status": "pending",
       "acceptanceCriteria": [
         "CRUD 接口可用",
         "测试通过"
       ],
-      "result": "",
+      "priority": 2,
+      "passes": false,
       "notes": ""
-    }
-  ],
-  "progress": [
-    {
-      "storyId": "S-001",
-      "timestamp": "2026-03-25T10:05:00Z",
-      "event": "completed",
-      "agent": "claude",
-      "summary": "架构设计完成，输出了数据模型和 API 定义"
     }
   ]
 }
 ```
 
-**字段说明：**
+**核心字段（和 Ralph 一致）：**
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `status` (顶层) | `"pending"` / `"in_progress"` / `"completed"` | 整体项目状态 |
-| `stories[].status` | `"pending"` / `"in_progress"` / `"completed"` / `"failed"` | 单个 story 状态 |
-| `stories[].agent` | `"claude"` / `"codex"` / `"trae"` / `"gemini"` | 按能力路由表分配 |
-| `stories[].category` | `"ultrabrain"` / `"deep"` / `"standard"` / `"quick"` / ... | 对应类别路由表 |
-| `stories[].runtime` | `"subagent"` / `"acp"` | 按运行时路由策略选择 |
-| `stories[].methodology` | string | 按方法论路由表选择，见下方"执行方法论层" |
-| `stories[].priority` | number | 执行顺序，小数优先 |
+| `project` | string | 项目名 |
+| `branchName` | string | 工作分支 |
+| `description` | string | 需求描述 |
+| `stories[].id` | string | Story 标识 |
+| `stories[].title` | string | 一句话描述 |
 | `stories[].acceptanceCriteria` | string[] | 可验证的完成标准 |
-| `progress[]` | array | 追加式事件日志，不删改 |
+| `stories[].priority` | number | 执行顺序，小数优先 |
+| `stories[].passes` | boolean | `false` = 未完成，`true` = 已完成 |
+| `stories[].notes` | string | 执行备注 |
+
+**agent/methodology/runtime 等由 orchestrator 在执行时根据路由表自动决定，不写进 plan.json。**
 
 ### 使用流程
 
@@ -168,10 +148,7 @@ openclaw system event --text "继续执行 plan.json：读取项目根目录的 
 创建 plan.json（写入项目根目录）
     │
     ▼
-┌─► 读 plan.json → 找最高优先级 pending story
-│       │
-│       ▼
-│   更新 story status → "in_progress"
+┌─► 读 plan.json → 找最高优先级 passes: false 的 story
 │       │
 │       ▼
 │   按 methodology 执行 story（注入方法论要求）
@@ -179,22 +156,22 @@ openclaw system event --text "继续执行 plan.json：读取项目根目录的 
 │       ▼
 │   验证 acceptanceCriteria
 │       │
-│       ├── 失败 → status: "failed"，记录 notes，考虑升级 agent
+│       ├── 失败 → 记录 notes，考虑升级 agent
 │       │
 │       └── 通过 → 编码类 story？
 │                   │
 │                   ├── 是 → spawn reviewer → review 通过？
-│                   │                           ├── 是 → status: "completed"
+│                   │                           ├── 是 → passes: true
 │                   │                           └── 否 → 修复 → 重新验证+review
 │                   │
-│                   └── 否 → status: "completed"
+│                   └── 否 → passes: true
 │       │
 │       ▼
-│   追加 progress，还有 pending stories？
+│   还有 passes: false 的 stories？
 │       │
 └───── 是 ──┘
         │
-        否 → 生成 retrospective → 项目 status: "completed"
+        否 → 生成 retrospective → 项目完成
 ```
 
 ### 三种模式
@@ -240,7 +217,7 @@ for i in $(seq 1 $MAX_ITERATIONS); do
   # 读 plan.json，找下一个 pending story
   NEXT=$(node -e "
     const p = require('./plan.json');
-    const s = p.stories.filter(s => s.status === 'pending')
+    const s = p.stories.filter(s => !s.passes)
       .sort((a,b) => a.priority - b.priority)[0];
     if (s) console.log(JSON.stringify(s));
     else console.log('DONE');
@@ -259,12 +236,8 @@ for i in $(seq 1 $MAX_ITERATIONS); do
     const fs = require('fs');
     const p = JSON.parse(fs.readFileSync('plan.json'));
     const s = p.stories.find(s => s.id === '$SID');
-    s.status = 'completed';
-    p.progress.push({
-      storyId: '$SID', timestamp: new Date().toISOString(),
-      event: 'completed', agent: '$AGENT', summary: 'Auto-completed by CLI loop'
-    });
-    if (p.stories.every(s => s.status === 'completed')) p.status = 'completed';
+    s.passes = true;
+    if (p.stories.every(s => s.passes)) console.log('ALL_COMPLETE');
     fs.writeFileSync('plan.json', JSON.stringify(p, null, 2));
   "
 done
@@ -374,7 +347,7 @@ sessions_spawn({
 
 1. 运行相关测试/构建命令，确认输出
 2. 检查 acceptanceCriteria 是否全部满足
-3. 只有验证通过才能更新 plan.json status 为 `"completed"`
+3. 只有验证通过才能更新 plan.json `passes: true`
 
 ```
 story 执行完毕
@@ -382,19 +355,19 @@ story 执行完毕
     ▼
 运行验证命令（测试/构建/lint）
     │
-    ├── 通过 → 检查 acceptanceCriteria → 全部满足 → status: "completed"
+    ├── 通过 → 检查 acceptanceCriteria → 全部满足 → passes: true
     │
     └── 失败 → 修复 → 重新验证（不要跳过直接标完成）
 ```
 
 **红线：**
-- ❌ agent 说"已完成"就直接标 completed — 必须有验证证据
+- ❌ agent 说"已完成"就直接标 passes: true — 必须有验证证据
 - ❌ 跳过测试直接标完成 — 即使 agent 说"我已经手动验证了"
-- ✅ 运行命令 → 看到绿灯 → 再标 completed
+- ✅ 运行命令 → 看到绿灯 → 再标 passes: true
 
 ### Code Review（编码类 story 必须）
 
-**每个编码类 story（methodology 含 `tdd`）验证通过后，必须 spawn 一个 reviewer agent 做 code review，通过后才能标 completed。**
+**每个编码类 story（methodology 含 `tdd`）验证通过后，必须 spawn 一个 reviewer agent 做 code review，通过后才能标 `passes: true`。**
 
 ```
 story 验证通过
@@ -404,7 +377,7 @@ spawn reviewer agent（用 codex 或 claude）
     │
     ▼
 review 结果？
-    ├── 通过 → status: "completed"
+    ├── 通过 → passes: true
     └── 不通过 → 原 agent 修复 → 重新验证 → 重新 review
 ```
 
@@ -433,7 +406,7 @@ sessions_spawn({
 
 ### 项目复盘（所有 stories 完成后自动执行）
 
-**当 plan.json 所有 stories 都标记 `completed` 后，自动生成复盘追加到 plan.json。**
+**当 plan.json 所有 stories 都 `passes: true` 后，自动生成复盘追加到 plan.json。**
 
 orchestrator 在标记项目 `status: "completed"` 之前，必须写入 `retrospective` 字段：
 
@@ -786,11 +759,13 @@ sessions_yield({ message: "对比三个方案，选择最优" })
 Step 1: 创建 plan.json
 {
   "project": "博客系统",
+  "branchName": "feat/blog-system",
+  "description": "创建博客系统，前端 React，后端 Node.js，带测试",
   "stories": [
-    { "id": "S-001", "title": "设计架构", "agent": "claude", "category": "deep", "methodology": "brainstorming → writing-plans", "priority": 1, "status": "pending" },
-    { "id": "S-002", "title": "实现后端 API", "agent": "codex", "category": "standard", "methodology": "tdd", "priority": 2, "status": "pending" },
-    { "id": "S-003", "title": "创建前端组件", "agent": "codex", "category": "standard", "methodology": "tdd", "priority": 2, "status": "pending" },
-    { "id": "S-004", "title": "编写测试", "agent": "codex", "category": "standard", "methodology": "tdd", "priority": 3, "status": "pending" }
+    { "id": "S-001", "title": "设计架构", "acceptanceCriteria": ["输出数据模型", "输出 API 定义"], "priority": 1, "passes": false },
+    { "id": "S-002", "title": "实现后端 API", "acceptanceCriteria": ["CRUD 可用", "测试通过"], "priority": 2, "passes": false },
+    { "id": "S-003", "title": "创建前端组件", "acceptanceCriteria": ["页面可渲染", "测试通过"], "priority": 2, "passes": false },
+    { "id": "S-004", "title": "编写集成测试", "acceptanceCriteria": ["端到端测试通过"], "priority": 3, "passes": false }
   ]
 }
 
@@ -838,9 +813,9 @@ sessions_spawn({
 1. **先建 plan.json 再 spawn** — 没有 plan 不允许开始执行
 2. **每个 story 必须标注 methodology** — spawn 指令中必须包含方法论要求，不要让 agent 自己决定用不用 TDD
 3. **编码类 story 必须 TDD** — 先写测试再实现，没有例外
-4. **每个 story 完成前必须验证** — 运行测试/构建确认通过，再标 completed
+4. **每个 story 完成前必须验证** — 运行测试/构建确认通过，再标 `passes: true`
 5. **每完成一个 story 立即更新 plan.json** — 不要攒着批量更新
-6. **完成 story 后自动继续下一个** — 不要停下来问用户"需要继续吗"，直接执行下一个 pending story。只有全部完成或被阻塞时才停
+6. **完成 story 后自动继续下一个** — 不要停下来问用户"需要继续吗"，直接执行下一个 `passes: false` 的 story。只有全部完成或被阻塞时才停
 7. **规划类用 subagent，编码类用 acp** — 混合策略是当前最稳定方案
 8. **ACP relay stall 时走兜底** — 按 Step 2→3→4→5 逐级降级，绝不黑洞等待
 9. **不要用 trae 做编码实现** - trae 只用于文档、注释、简单文案，前端/后端实现用 codex
@@ -863,7 +838,7 @@ sessions_spawn({
 | relay fallback 也无结果 | child 也失败 | 按兜底流程 Step 4→5 逐级降级 |
 | agent 跳过 TDD 直接写代码 | spawn 指令中方法论要求不够明确 | 在 task 描述中加粗方法论要求，用"**必须**"而非"建议" |
 | story 缺少 methodology 字段 | 创建 plan.json 时遗漏 | 按方法论路由表补全，编码类默认 `tdd`，设计类默认 `brainstorming → writing-plans` |
-| agent 说"已完成"但没跑测试 | 未执行 verification | 不标 completed，要求 agent 先运行验证命令并输出结果 |
+| agent 说"已完成"但没跑测试 | 未执行 verification | 不标 `passes: true`，要求 agent 先运行验证命令并输出结果 |
 
 ## 配置参考
 
