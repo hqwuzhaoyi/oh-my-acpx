@@ -10,7 +10,7 @@ description: "Multi-agent task orchestration using OpenClaw ACP runtime. Automat
 ## 核心原则
 
 1. **Plan-Driven** — 先建 plan.json 再动手，持续追踪直到完成
-2. **混合运行时策略** — 规划/调研用 `subagent`（可见性稳定），编码用 `acp`（能力更强）
+2. **默认 ACP** — 所有任务默认用 `acp` + `streamTo:"parent"`，只有 ACP 失败时才降级到 `subagent`
 3. **能力匹配** — 复杂任务给强 agent，简单任务给快 agent
 4. **并行优于串行** — 独立任务同时执行
 5. **强制兜底** — ACP 任务 75s 无输出则自动走 child 结果回捞，绝不黑洞等待
@@ -442,8 +442,8 @@ orchestrator 在标记项目 `status: "completed"` 之前，必须写入 `retros
 
 | 任务类型 | 运行时 | 原因 |
 |---|---|---|
-| 规划/调研/汇总 (ultrabrain, deep, explore, writing) | `subagent` | 完成通告稳定可靠 |
-| 编码/重构/修改 (standard, quick, visual-engineering) | `acp` + `streamTo:"parent"` | coding harness 能力更强 |
+| 所有任务（默认） | `acp` + `streamTo:"parent"` | 能力更强，默认首选 |
+| ACP 失败时降级 | `subagent` | 兜底，可见性稳定但能力受限 |
 
 ### 降级链路（ACP 失败时）
 
@@ -577,18 +577,20 @@ node scripts/runtime-router.js --category <category>
 
 ## 使用模式
 
-### 模式 0：混合路由（推荐默认）
+### 模式 0：默认 ACP（推荐）
 
 ```json
-// 规划阶段 → subagent（完成通告稳定）
+// 所有任务默认用 acp，不区分规划/编码
 sessions_spawn({
-  runtime: "subagent",
+  runtime: "acp",
   agentId: "claude",
+  mode: "run",
+  streamTo: "parent",
   task: "分析需求，设计架构，输出实现计划"
 })
 sessions_yield({})
 
-// 编码阶段 → acp（能力更强）+ 兜底
+// 编码也用 acp
 sessions_spawn({
   runtime: "acp",
   agentId: "codex",
@@ -596,17 +598,18 @@ sessions_spawn({
   streamTo: "parent",
   task: "实现后端 API"
 })
-// 并行启动 relay watch：
-// node scripts/relay-fallback.js --watch --stream-log <streamLogPath> --timeout 75
+// ACP 失败时按降级链路处理
 ```
 
 ### 模式 1：按能力选择单 agent
 
 ```json
-// 复杂架构 → claude（subagent 运行时，稳定可见）
+// 复杂架构 → claude（默认 acp）
 sessions_spawn({
-  runtime: "subagent",
+  runtime: "acp",
   agentId: "claude",
+  mode: "run",
+  streamTo: "parent",
   task: "重构整个认证系统，支持 OAuth2、JWT、Session 三种模式"
 })
 
@@ -816,7 +819,7 @@ sessions_spawn({
 4. **每个 story 完成前必须验证** — 运行测试/构建确认通过，再标 `passes: true`
 5. **每完成一个 story 立即更新 plan.json** — 不要攒着批量更新
 6. **完成 story 后自动继续下一个** — 不要停下来问用户"需要继续吗"，直接执行下一个 `passes: false` 的 story。只有全部完成或被阻塞时才停
-7. **规划类用 subagent，编码类用 acp** — 混合策略是当前最稳定方案
+7. **默认用 acp，失败才降级 subagent** — 不要预判哪些任务该用 subagent
 8. **ACP relay stall 时走兜底** — 按 Step 2→3→4→5 逐级降级，绝不黑洞等待
 9. **不要用 trae 做编码实现** - trae 只用于文档、注释、简单文案，前端/后端实现用 codex
 10. **不要用 claude 做简单任务** - 浪费资源，速度慢
