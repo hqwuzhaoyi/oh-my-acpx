@@ -490,13 +490,13 @@ node scripts/runtime-router.js --category <category>
 │  - 多模态辅助                                                 │
 ├─────────────────────────────────────────────────────────────┤
 │  quick                                                       │
-│  简单文件、快速原型、小修改                                    │
+│  文档、注释、简单文案修改                                      │
 │  ─────────────────────────────────────────────────────────  │
 │  trae (最快)                                                 │
-│  - 单文件修改                                                 │
-│  - 快速原型                                                   │
+│  - 文档与注释                                                 │
+│  - 中文文案                                                   │
 │  - 样板代码                                                   │
-│  - 中文需求                                                   │
+│  - 简单配置修改                                                │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -506,9 +506,9 @@ node scripts/runtime-router.js --category <category>
 |---|---|---|---|
 | **ultrabrain** | 复杂架构、深度推理 | claude | codex |
 | **deep** | 多文件重构、复杂逻辑 | claude | codex |
-| **visual-engineering** | 前端 UI、CSS、交互稿 | gemini | trae |
-| **standard** | 常规开发、CRUD | codex | trae |
-| **quick** | 单文件、小修改 | trae | codex |
+| **visual-engineering** | 前端 UI、CSS、交互稿 | gemini | codex |
+| **standard** | 常规开发、CRUD、前端实现 | codex | claude |
+| **quick** | 文档、注释、简单文案 | trae | gemini |
 | **writing** | 文档、注释、说明文 | gemini | codex |
 | **explore** | 代码搜索、调研 | codex | gemini |
 
@@ -520,8 +520,8 @@ node scripts/runtime-router.js --category <category>
 | **速度** | ⚡⚡⚡ | ⚡⚡ | ⚡⚡ | ⚡ |
 | **中文优化** | ✅ | ❌ | ✅ | ❌ |
 | **复杂架构** | ❌ | ⚠️ | ⚠️ | ✅ |
-| **快速原型** | ✅ | ✅ | ✅ | ⚠️ (overkill) |
-| **文档整理/UI 表达** | ⚠️ | ✅ | ✅✅ | ✅ |
+| **前端实现** | ❌ | ✅ | ⚠️ | ✅ |
+| **文档/注释** | ✅ | ⚠️ | ✅✅ | ✅ |
 | **成本** | 低 | 中 | 中 | 高 |
 
 ## 使用模式
@@ -568,13 +568,13 @@ sessions_spawn({
   task: "实现用户 CRUD API"
 })
 
-// 快速原型 → trae
+// 快速文档 → trae
 sessions_spawn({
   runtime: "acp",
   agentId: "trae",
   mode: "run",
   streamTo: "parent",
-  task: "创建一个登录表单组件"
+  task: "补充 API 接口文档和代码注释"
 })
 ```
 
@@ -598,9 +598,9 @@ sessions_spawn({
 
 sessions_spawn({
   runtime: "acp",
-  agentId: "trae",
+  agentId: "codex",
   streamTo: "parent",
-  task: "创建前端 UI 组件"  // visual-engineering + quick 任务
+  task: "创建前端 UI 组件"  // standard 任务
 })
 
 sessions_yield({ message: "等待所有 agent 完成" })
@@ -626,7 +626,7 @@ openclaw agent --agent claude --session-id "$SID" \
 # Turn 2: 执行（agent 已知 Turn 1 的规划内容）
 openclaw agent --agent claude --session-id "$SID" \
   --message "规划已完成。用 sessions_spawn 分派子任务：
-复杂 → claude (acp), 中等 → codex (acp), 简单 → trae (acp)。
+复杂 → claude (acp), 中等 → codex (acp), 文档 → trae (acp)。
 并行 spawn，然后 sessions_yield 等待。" \
   --json --timeout 300
 ```
@@ -655,7 +655,7 @@ done
 // 让不同 agent 做同一件事，对比结果
 sessions_spawn({
   runtime: "acp",
-  agentId: "trae",
+  agentId: "codex",
   streamTo: "parent",
   task: "重构 auth 模块"
 })
@@ -685,17 +685,17 @@ sessions_yield({ message: "对比三个方案，选择最优" })
     ▼
 分析任务复杂度
     │
-    ├── 单文件/小修改 ──────────────────► trae (quick)
+    ├── 文档/注释/小改 ──────────────────► trae (quick)
     │
-    ├── 常规功能/API ───────────────────► codex (standard)
+    ├── 常规功能/API/前端 ────────────────► codex (standard)
     │
     ├── 架构设计/复杂重构 ──────────────► claude (deep)
     │
     └── 多模块项目 ─────────────────────► 并行分配
                                             │
                                             ├── 架构 → claude
-                                            ├── 后端 → codex
-                                            └── 前端 → trae
+                                            ├── 后端/前端 → codex
+                                            └── 文档 → trae
 ```
 
 ## 实战示例
@@ -711,7 +711,7 @@ Step 1: 创建 plan.json
   "stories": [
     { "id": "S-001", "title": "设计架构", "agent": "claude", "category": "deep", "methodology": "brainstorming → writing-plans", "priority": 1, "status": "pending" },
     { "id": "S-002", "title": "实现后端 API", "agent": "codex", "category": "standard", "methodology": "tdd", "priority": 2, "status": "pending" },
-    { "id": "S-003", "title": "创建前端组件", "agent": "trae", "category": "quick", "methodology": "tdd", "priority": 2, "status": "pending" },
+    { "id": "S-003", "title": "创建前端组件", "agent": "codex", "category": "standard", "methodology": "tdd", "priority": 2, "status": "pending" },
     { "id": "S-004", "title": "编写测试", "agent": "codex", "category": "standard", "methodology": "tdd", "priority": 3, "status": "pending" }
   ]
 }
@@ -725,10 +725,10 @@ Step 2: 按 priority + methodology 执行
 Step 3: 每完成一个 story，验证 → 更新 plan.json status
 ```
 
-### 示例 2：快速原型
+### 示例 2：快速文档
 
 ```
-需求：快速做一个登录页面
+需求：补充 API 文档
 
 分析：quick 任务 → trae
 
@@ -736,7 +736,7 @@ Step 3: 每完成一个 story，验证 → 更新 plan.json status
 sessions_spawn({
   agentId: "trae",
   streamTo: "parent",
-  task: "创建登录页面，包含表单验证"
+  task: "补充 API 接口文档和代码注释"
 })
 ```
 
@@ -765,9 +765,9 @@ sessions_spawn({
 6. **完成 story 后自动继续下一个** — 不要停下来问用户"需要继续吗"，直接执行下一个 pending story。只有全部完成或被阻塞时才停
 7. **规划类用 subagent，编码类用 acp** — 混合策略是当前最稳定方案
 8. **ACP relay stall 时走兜底** — 按 Step 2→3→4→5 逐级降级，绝不黑洞等待
-9. **不要用 trae 做复杂架构** - 能力不足，会出错
+9. **不要用 trae 做编码实现** - trae 只用于文档、注释、简单文案，前端/后端实现用 codex
 10. **不要用 claude 做简单任务** - 浪费资源，速度慢
-11. **中文需求优先 trae / gemini** - 前者适合快改，后者适合文档与 UI 表达
+11. **中文文档优先 trae / gemini** - trae 适合文档注释，gemini 适合 UI 表达和资料归纳
 12. **Gemini 适合写和看，不适合扛主架构** - 更适合 visual-engineering、writing、轻调研
 13. **并发控制** - 同时运行 2-4 个 agent 较合适
 14. **权限** - 确保 `--approve-all` 或配置默认权限
