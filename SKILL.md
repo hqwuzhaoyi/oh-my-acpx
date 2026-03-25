@@ -758,17 +758,20 @@ sessions_spawn({
 ## 注意事项
 
 1. **先建 plan.json 再 spawn** — 没有 plan 不允许开始执行
-2. **每完成一个 story 立即更新 plan.json** — 不要攒着批量更新
-3. **完成 story 后自动继续下一个** — 不要停下来问用户"需要继续吗"，直接执行下一个 pending story。只有全部完成或被阻塞时才停
-4. **规划类用 subagent，编码类用 acp** — 混合策略是当前最稳定方案
-4. **ACP relay stall 时走兜底** — 按 Step 2→3→4→5 逐级降级，绝不黑洞等待
-5. **不要用 trae 做复杂架构** - 能力不足，会出错
-6. **不要用 claude 做简单任务** - 浪费资源，速度慢
-7. **中文需求优先 trae / gemini** - 前者适合快改，后者适合文档与 UI 表达
-8. **Gemini 适合写和看，不适合扛主架构** - 更适合 visual-engineering、writing、轻调研
-9. **并发控制** - 同时运行 2-4 个 agent 较合适
-10. **权限** - 确保 `--approve-all` 或配置默认权限
-11. **降级不恐慌** — relay stall 是可见性问题，不是执行问题，child 通常已完成
+2. **每个 story 必须标注 methodology** — spawn 指令中必须包含方法论要求，不要让 agent 自己决定用不用 TDD
+3. **编码类 story 必须 TDD** — 先写测试再实现，没有例外
+4. **每个 story 完成前必须验证** — 运行测试/构建确认通过，再标 completed
+5. **每完成一个 story 立即更新 plan.json** — 不要攒着批量更新
+6. **完成 story 后自动继续下一个** — 不要停下来问用户"需要继续吗"，直接执行下一个 pending story。只有全部完成或被阻塞时才停
+7. **规划类用 subagent，编码类用 acp** — 混合策略是当前最稳定方案
+8. **ACP relay stall 时走兜底** — 按 Step 2→3→4→5 逐级降级，绝不黑洞等待
+9. **不要用 trae 做复杂架构** - 能力不足，会出错
+10. **不要用 claude 做简单任务** - 浪费资源，速度慢
+11. **中文需求优先 trae / gemini** - 前者适合快改，后者适合文档与 UI 表达
+12. **Gemini 适合写和看，不适合扛主架构** - 更适合 visual-engineering、writing、轻调研
+13. **并发控制** - 同时运行 2-4 个 agent 较合适
+14. **权限** - 确保 `--approve-all` 或配置默认权限
+15. **降级不恐慌** — relay stall 是可见性问题，不是执行问题，child 通常已完成
 
 ## 错误处理
 
@@ -780,6 +783,9 @@ sessions_spawn({
 | 权限被拒 | 没有配置 | 加 `--approve-all` |
 | spawn 失败 | agentId 错误 | 检查配置 |
 | relay fallback 也无结果 | child 也失败 | 按兜底流程 Step 4→5 逐级降级 |
+| agent 跳过 TDD 直接写代码 | spawn 指令中方法论要求不够明确 | 在 task 描述中加粗方法论要求，用"**必须**"而非"建议" |
+| story 缺少 methodology 字段 | 创建 plan.json 时遗漏 | 按方法论路由表补全，编码类默认 `tdd`，设计类默认 `brainstorming → writing-plans` |
+| agent 说"已完成"但没跑测试 | 未执行 verification | 不标 completed，要求 agent 先运行验证命令并输出结果 |
 
 ## 配置参考
 
