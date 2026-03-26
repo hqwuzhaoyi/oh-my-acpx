@@ -201,8 +201,14 @@ oh-my-acpx/
 ├── config/
 │   ├── acpx-config.json      # acpx 基础配置模板
 │   └── acpx-config-full.json # 完整配置（含路由分类和 fallback）
+├── references/               # 参考文档（SKILL.md 按需引用）
+│   ├── usage-modes.md        # 5 种使用模式 + 3 种运行环境
+│   ├── agent-routing.md      # Agent 能力分层、路由表、对比
+│   ├── acp-fallback.md       # ACP relay stall 5 步兜底流程
+│   ├── config.md             # openclaw.json / acpx 配置 + 排错
+│   └── examples.md           # 实战示例 + spawn 方法论注入
 ├── scripts/                  # 工具脚本
-│   ├── self-schedule.js      # 自调度检查（每个 turn 结束前运行，运行时依赖）
+│   ├── self-schedule.js      # 自调度检查（每个 turn 结束前运行）
 │   ├── relay-fallback.js     # ACP relay 兜底诊断（人工调试用）
 │   ├── runtime-router.js     # 路由规则查询（人工调试用）
 │   └── test-runtime-stability.sh  # 稳定性测试套件
