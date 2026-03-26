@@ -34,6 +34,22 @@ description: "Multi-agent task orchestration using OpenClaw ACP runtime. Automat
    - 遇到不可恢复的错误
 5. **plan.json 存项目根目录** — 所有模式共用同一个文件
 
+### 执行检查点（每次回复前强制自检）
+
+**在输出任何回复前，必须先完成以下检查清单（至少满足一项）：**
+
+- [ ] 本 turn 已调用 `sessions_spawn` 执行下一个 story
+- [ ] 本 turn 已调用 `openclaw system event` 触发下一轮
+- [ ] 所有 stories 都 `passes: true`（项目完成）
+- [ ] 当前 story 被阻塞且已在 notes 中记录原因
+
+**如果以上都不满足 → 你正在违规（只汇报不执行）→ 立即调用 `sessions_spawn` 或 `system event`**
+
+**违规示例：**
+- ❌ 输出"正在继续...S-003A/S-003B..."但没有调用 sessions_spawn
+- ❌ 说"下一步是 X"但没有实际执行
+- ❌ 汇报状态后就结束 turn，既没 spawn 也没 system event
+
 ### 自动循环（关键）
 
 **这是和普通 agent 最大的区别：你必须像 Ralph 一样自驱循环，不是做完一步就停。**
@@ -113,50 +129,73 @@ description: "Multi-agent task orchestration using OpenClaw ACP runtime. Automat
   继续 S-002: 实现后端 API..."
 ```
 
-### 跨 Turn 自调度（飞书/聊天场景必读）
+### 跨 Turn 自调度（脚本强制执行）
 
 **问题：** 在飞书等聊天场景中，每条用户消息只触发一个 agent turn。如果一个 story 耗尽了当前 turn 的时间/token，agent 会被迫停下，无法自动继续下一个 story。
 
-**解决方案：在执行模式下，如果本 turn 没能继续 spawn 下一个 `passes: false` story，就必须在 turn 结束前用 `system event` 给自己发一条消息触发下一轮。**
+**解决方案：每个 turn 结束前，必须运行自调度检查脚本。脚本会自动判断是否需要触发下一轮。**
+
+**强制规则：每个 turn 的最后一步，必须执行以下脚本：**
 
 ```bash
-# 在当前 turn 结束前执行：
-openclaw system event --text "继续执行 plan.json：读取项目根目录的 plan.json，找最高优先级 passes:false 的 story，按 acp-orchestrator skill 继续执行。" --mode now
+# 自调度检查 — 每个 turn 结束前必须运行
+node -e "
+const fs = require('fs');
+const { execSync } = require('child_process');
+
+// 读取 plan.json
+const planPath = process.argv[1] || 'plan.json';
+if (!fs.existsSync(planPath)) { console.log('NO_PLAN'); process.exit(0); }
+
+const plan = JSON.parse(fs.readFileSync(planPath, 'utf8'));
+const pending = plan.stories.filter(s => !s.passes);
+
+if (pending.length === 0) {
+  console.log('ALL_DONE: 所有 stories 已完成');
+  process.exit(0);
+}
+
+// 还有待办 story → 触发下一轮
+console.log('PENDING: ' + pending.length + ' stories 待执行，触发下一轮...');
+const next = pending.sort((a, b) => a.priority - b.priority)[0];
+const msg = '继续执行 plan.json：下一个 story 是 ' + next.id + ': ' + next.title + '。读取 plan.json，按 acp-orchestrator skill 的执行模式直接推进，不要只汇报。';
+
+try {
+  execSync('openclaw system event --text \"' + msg + '\" --mode now', { stdio: 'inherit' });
+  console.log('TRIGGERED: 已触发下一轮');
+} catch (e) {
+  console.error('TRIGGER_FAILED: ' + e.message);
+}
+" plan.json
 ```
 
-**硬性规则：**
+**用法：在每个 turn 回复用户之前，先运行这个脚本。脚本会自动检查 plan.json 并在需要时触发下一轮。**
 
-1. 每完成一个 story 后，先更新 plan.json
-2. 检查是否还有 `passes: false` 的 stories
-3. 如果没有 → 项目完成，不需要触发
-4. 如果有，且本 turn 已经直接开始执行下一个 story → 不需要触发
-5. 如果有，但本 turn **没有**开始执行下一个 story（无论原因是快超时、token 不足、review 太长、还是回复用户汇报） → **必须在回复用户前调用 `system event`**
+**硬性规则（简化为 2 条）：**
 
-**这不是建议，是必须执行的收尾动作。**
+1. 每个 turn 结束前，必须运行自调度检查脚本
+2. 不要自行判断"是否需要触发" — 让脚本判断
+
+**流程图：**
 
 ```
-执行模式下，当前 turn 即将结束
+Turn 即将结束
     │
     ▼
-还有 passes: false 的 stories？
+运行自调度检查脚本
     │
-    ├── 没有 → 回复用户："所有 stories 完成"
+    ├── ALL_DONE → 正常结束
     │
-    └── 有
-         │
-         ├── 本 turn 已直接开始下一个 story → 正常继续，不触发
-         │
-         └── 本 turn 未开始下一个 story
-              │
-              ├── 必须 exec: openclaw system event --text "继续 plan.json" --mode now
-              └── 然后才能回复用户："已触发下一轮继续执行"
+    ├── TRIGGERED → 下一轮已触发，回复用户
+    │
+    └── TRIGGER_FAILED → 手动调用 system event 兜底
 ```
 
 **红线：**
-- ❌ 还有 `passes: false`，但只是汇报状态，不触发下一轮
-- ❌ 说"我会继续"，但没执行 `system event`
+- ❌ 还有 `passes: false`，但没运行自调度脚本
+- ❌ 说"我会继续"，但没运行脚本
 - ❌ 执行模式下把自己退化成诊断模式，只读 plan 不推进
-- ✅ 如果没法在本 turn 继续做，就先触发下一轮，再回复
+- ✅ 每个 turn 结束前运行脚本，让脚本决定是否触发
 
 ### plan.json 结构
 
