@@ -135,39 +135,22 @@ description: "Multi-agent task orchestration using OpenClaw ACP runtime. Automat
 
 **解决方案：每个 turn 结束前，必须运行自调度检查脚本。脚本会自动判断是否需要触发下一轮。**
 
-**强制规则：每个 turn 的最后一步，必须执行以下脚本：**
+**强制规则：每个 turn 的最后一步，必须执行自调度脚本：**
 
 ```bash
-# 自调度检查 — 每个 turn 结束前必须运行
-node -e "
-const fs = require('fs');
-const { execSync } = require('child_process');
-
-// 读取 plan.json
-const planPath = process.argv[1] || 'plan.json';
-if (!fs.existsSync(planPath)) { console.log('NO_PLAN'); process.exit(0); }
-
-const plan = JSON.parse(fs.readFileSync(planPath, 'utf8'));
-const pending = plan.stories.filter(s => !s.passes);
-
-if (pending.length === 0) {
-  console.log('ALL_DONE: 所有 stories 已完成');
-  process.exit(0);
-}
-
-// 还有待办 story → 触发下一轮
-console.log('PENDING: ' + pending.length + ' stories 待执行，触发下一轮...');
-const next = pending.sort((a, b) => a.priority - b.priority)[0];
-const msg = '继续执行 plan.json：下一个 story 是 ' + next.id + ': ' + next.title + '。读取 plan.json，按 acp-orchestrator skill 的执行模式直接推进，不要只汇报。';
-
-try {
-  execSync('openclaw system event --text \"' + msg + '\" --mode now', { stdio: 'inherit' });
-  console.log('TRIGGERED: 已触发下一轮');
-} catch (e) {
-  console.error('TRIGGER_FAILED: ' + e.message);
-}
-" plan.json
+node scripts/self-schedule.js [plan.json路径]
+# 或使用默认路径（当前目录的 plan.json）：
+node scripts/self-schedule.js
 ```
+
+**脚本输出及含义：**
+
+| 输出 | 含义 | 后续动作 |
+|---|---|---|
+| `NO_PLAN` | 没有 plan.json | 跳过，正常回复 |
+| `ALL_DONE` | 所有 stories 完成 | 正常回复，项目完成 |
+| `TRIGGERED` | 已触发下一轮 | 告知用户"已触发下一轮继续执行" |
+| `TRIGGER_FAILED` | 触发失败 | 手动执行 `openclaw system event --text "继续执行 plan.json" --mode now` |
 
 **用法：在每个 turn 回复用户之前，先运行这个脚本。脚本会自动检查 plan.json 并在需要时触发下一轮。**
 

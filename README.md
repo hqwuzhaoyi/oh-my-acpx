@@ -201,9 +201,10 @@ oh-my-acpx/
 ├── config/
 │   ├── acpx-config.json      # acpx 基础配置模板
 │   └── acpx-config-full.json # 完整配置（含路由分类和 fallback）
-├── scripts/                  # 人工调试工具（非运行时依赖）
-│   ├── relay-fallback.js     # ACP relay 兜底诊断（inspect + watch）
-│   ├── runtime-router.js     # 路由规则查询
+├── scripts/                  # 工具脚本
+│   ├── self-schedule.js      # 自调度检查（每个 turn 结束前运行，运行时依赖）
+│   ├── relay-fallback.js     # ACP relay 兜底诊断（人工调试用）
+│   ├── runtime-router.js     # 路由规则查询（人工调试用）
 │   └── test-runtime-stability.sh  # 稳定性测试套件
 ├── examples/
 │   ├── quick-task.md
