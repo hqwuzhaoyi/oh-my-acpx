@@ -213,6 +213,35 @@ acp + streamTo:parent → 75s 无输出 → child 结果回捞 → direct acpx �
 
 完整 5 步兜底流程见 `references/acp-fallback.md`。降级不恐慌 — relay stall 是可见性问题，child 通常已完成。
 
+### Stall 检测与自动恢复
+
+ACP session 可能 stall（60s+ 无输出）但不会自动结束。orchestrator 需要主动检测并恢复。
+
+**检测方式：运行 stall-detector 脚本**
+
+```bash
+# 单次检查（plan.json 超过 120s 无变化则触发恢复）
+node ~/.agents/skills/acp-orchestrator/scripts/stall-detector.js /path/to/plan.json
+
+# 持续监控（每 60s 检查，适合长时间任务）
+node ~/.agents/skills/acp-orchestrator/scripts/stall-detector.js /path/to/plan.json --watch
+
+# 自定义超时阈值
+node ~/.agents/skills/acp-orchestrator/scripts/stall-detector.js /path/to/plan.json --timeout 180
+```
+
+| 输出 | 含义 |
+|---|---|
+| `HEALTHY` | plan.json 有进展，无需干预 |
+| `STALLED` | 超时无进展，已触发 system event 恢复 |
+| `STALLED_MAX` | 已恢复 3 次仍无进展，需人工干预 |
+| `ALL_DONE` | 所有 stories 完成 |
+
+**自动恢复逻辑：**
+- 检测 plan.json 的 `passes` 和 `notes` 是否有变化
+- 超过阈值无变化 → 发送 `openclaw system event` 要求继续执行
+- 最多自动恢复 3 次，避免死循环
+
 ## Agent 路由
 
 按类别自动选 agent。详细能力分层和对比见 `references/agent-routing.md`。
