@@ -14,6 +14,69 @@ description: "Use when user requests multi-agent task execution, parallel coding
 3. **能力匹配** — 复杂任务给强 agent，简单任务给快 agent
 4. **并行优于串行** — 独立任务同时执行
 5. **强制兜底** — ACP 任务 75s 无输出则自动走 child 结果回捞，绝不黑洞等待
+6. **按动作分段输出** — 每完成一个工具调用或逻辑步骤就输出，每段必须有新信息，禁止重复改写
+
+## 输出分段规则（Output Segmentation）
+
+> **问题：** Agent 要么一次输出2000+字导致消息发送失败，要么把同一内容重复3遍。
+
+### 核心规则
+
+**按动作分段，不按长度：**
+- ✅ 每完成一个工具调用就输出进度
+- ✅ 每发现重要信息就报告
+- ❌ 不要把所有工作做完再一次性输出
+- ❌ 不要把同一内容改写多遍
+
+**每段必须有新信息：**
+- ✅ "Checking plan.json... found S-003B needs work"
+- ✅ "Reading DirectPurchaseForm... identified 3 missing fields"
+- ❌ "S-003B needs work" → "Previously did S-003B" → "To clarify: S-003B status"（重复3次）
+
+**长度限制：**
+- 简单回答：50-200字，1段
+- 复杂任务：100-300字/段，多段
+- 硬性上限：500字/段
+
+### 自检清单（输出前必问）
+
+1. "这段有新信息吗？" — 没有 → 不要输出
+2. "我刚完成了一个动作吗？" — 是 → 可以输出
+3. "我在重复之前说过的话吗？" — 是 → 停止，继续工作
+
+### 好坏对比
+
+**❌ 坏例子1：一次性输出2000字**
+```
+[读文件 + 分析 + 修改 + 验证 + 总结] → 输出一大段
+结果：消息发送失败，打印到日志
+```
+
+**❌ 坏例子2：重复改写**
+```
+用户："有安排agent吗？"
+段1："有，做了S-003A和旧版S-003B，新版还没做"
+段2："也就是说，agent处理过，但新方案还没派"
+段3："更准确地说，旧方案做了，新方案plan改了"
+结果：同一信息说3遍，浪费时间
+```
+
+**✅ 好例子1：简单问题直接回答**
+```
+用户："有安排agent吗？"
+输出："是的，已安排过。S-003A完成，S-003B做了旧方案。新方案plan已更新，需要我按新拆法执行吗？"
+```
+
+**✅ 好例子2：复杂任务分段报告**
+```
+输出1："Checking auth flow... found issue in token validation"
+[tool: read auth.js]
+输出2："Token expiry check missing. Fixing now..."
+[tool: edit auth.js]
+输出3："Fixed. Running tests..."
+[tool: npm test]
+输出4："Tests pass. Bug resolved."
+```
 
 ## 任务追踪（Plan-Driven）
 
@@ -107,37 +170,7 @@ node ~/.agents/skills/acp-orchestrator/scripts/self-schedule.js [plan.json路径
 }
 ```
 
-agent/methodology/runtime 等由 orchestrator 在执行时根据路由表自动决定，不写进 plan.json。
-
-### 使用流程
-
-```
-用户请求
-    │
-    ▼
-分析需求 → 拆分 stories
-    │
-    ▼
-创建 plan.json（写入项目根目录）
-    │
-    ▼
-┌─► 读 plan.json → 找最高优先级 passes: false 的 story
-│       │
-│       ▼
-│   按 methodology 执行 story → 验证 → 输出摘要
-│       │
-│       ▼
-│   摘要写入 notes + passes: true
-│       │
-│       ▼
-│   还有 passes: false 的 stories？
-│       │
-└───── 是 ──┘
-        │
-        否 → 生成 retrospective → 项目完成
-```
-
-运行环境（OpenClaw Session / Claude Code / acpx CLI）详见 `references/usage-modes.md`。
+agent/methodology/runtime 等由 orchestrator 在执行时根据路由表自动决定，不写进 plan.json。运行环境（OpenClaw Session / Claude Code / acpx CLI）详见 `references/usage-modes.md`。
 
 ## 执行方法论层（Superpowers）
 
@@ -177,22 +210,115 @@ sessions_spawn({
 
 更多示例（设计类、Bug 修复类）见 `references/examples.md`。
 
-### 完成验证（所有 story 必须）
+### 完成验证与结构化评估
 
-每个 story 标记 `passes: true` 之前：
-1. 运行测试/构建命令，确认通过
-2. 检查 acceptanceCriteria 是否全部满足
-3. 只有验证通过才能更新 plan.json
+每个 story 标记 `passes: true` 之前，必须通过两层验证：
 
-❌ agent 说"已完成"就直接标 passes: true — 必须有验证证据
-✅ 运行命令 → 看到绿灯 → 再标 passes: true
+**第一层：客观验证（所有 story）** — 运行测试/构建命令，检查 acceptanceCriteria 全部满足。❌ agent 说"已完成"不算，✅ 看到绿灯才能进入第二层。
 
-### Code Review（编码类 story 必须）
+**第二层：结构化评估（编码类/设计类）** — spawn 独立 evaluator agent（不能是执行该 story 的同一个 agent），按维度 1-5 打分：
 
-编码类 story 验证通过后，spawn reviewer agent 做 code review：
-- reviewer 不能是执行该 story 的同一个 agent（避免自己审自己）
-- 不通过 → 修复 → 重新验证 → 重新 review（最多 2 次）
-- 设计类、文档类 story 跳过 review
+| Story 类型 | 评估维度 |
+|---|---|
+| 功能实现 | 正确性(40%) + 代码质量(30%) + 边界处理(20%) + 可维护性(10%) |
+| 架构设计 | 合理性(35%) + 可扩展性(25%) + 简洁性(25%) + 风险识别(15%) |
+| Bug 修复 | 根因准确(40%) + 修复完整性(30%) + 回归风险(20%) + 测试覆盖(10%) |
+| 重构 | 行为保持(40%) + 结构改善(30%) + 测试覆盖(20%) + 简洁性(10%) |
+
+**evaluator spawn 指令必须包含反宽松提示：**
+> "你的职责是找问题，不是夸奖。如果你觉得'还行'，大概率应该打 3 不是 4。宁可严格导致返工，也不要放过有问题的代码。"
+
+**评估结果处理：**
+- 加权总分 >= 3.0 → PASS → 标记 passes: true
+- 加权总分 < 3.0 → FAIL → 将评估反馈注入下一轮 task，重新 spawn 实现 agent 修复
+- 修复后重新评估，最多 2 轮（第 3 轮强制 PASS，在 notes 中记录遗留问题）
+- 文档类 story 跳过第二层评估
+
+### 迭代精炼（高风险 story 专用）
+
+> 灵感来源：Generator-Evaluator 迭代模式。普通 story 单次执行即可，高风险 story 通过多轮 generate→evaluate 循环显著提升质量。
+
+#### 何时启用
+
+在 plan.json story 中添加 `"iterative": true`（满足任一条件即标记）：
+
+| 条件 | 示例 |
+|---|---|
+| 核心架构决策，影响后续所有 story | 数据模型设计、认证架构 |
+| 用户明确要求高质量 | "这个要做好"、"仔细设计" |
+| 涉及 3+ 文件的复杂变更 | 大规模重构 |
+| 之前同类 story 评估不通过 | 第二次尝试 |
+
+#### 迭代流程
+
+1. 按正常方法论 spawn 实现 agent
+2. spawn evaluator 做结构化评估（见上节）
+3. 总分 >= 4.0 → 完成 | 3.0-4.0 → 再迭代一轮 | < 3.0 → 再迭代
+4. 最多 3 轮（ACP 超时和成本约束）
+5. 第 2 轮分数没有提升 → 停止，接受当前结果
+6. 每轮评估反馈必须具体：不是"做得更好"，而是"第 47 行缺少 timeout case"
+
+#### plan.json 扩展字段（可选，向后兼容）
+
+```json
+{
+  "iterative": true,
+  "iterationCount": 0,
+  "lastScore": null
+}
+```
+
+### 验收契约协商（编码类 story 推荐）
+
+> 问题：orchestrator 写的 acceptanceCriteria 可能太模糊，实现 agent 按自己理解做完后才发现偏差。
+
+#### 流程（在正式实现前，轻量级确认）
+
+```
+sessions_spawn({
+  agentId: "<agent>",
+  task: "在开始实现之前，先确认你对以下 story 的理解：
+    Story: {title}
+    acceptanceCriteria: {criteria}
+
+    请回答：
+    1. 你打算怎么实现？（1-2 句话）
+    2. acceptanceCriteria 是否有遗漏或模糊？如有，列出补充建议
+    3. 预计涉及哪些文件？
+    4. 有什么风险或依赖？
+
+    只回答以上问题，不要开始写代码。"
+})
+```
+
+orchestrator 审查回复：理解正确 → 更新 criteria（如有补充）→ spawn 正式实现；理解偏差 → 修正后重新确认（最多 1 轮）。
+
+#### 跳过条件
+
+- quick 类 story（文档、注释）
+- acceptanceCriteria 已含文件路径或函数签名
+- 同一 agent 刚完成了相关 story，已有上下文
+
+### 自适应复杂度（Adaptive Complexity）
+
+> 原则：harness 复杂度应匹配任务难度。简单任务加太多流程是浪费，复杂任务流程不够会出质量问题。
+
+| 等级 | 判断标准 | 执行流程 |
+|---|---|---|
+| **L1 简单** | 单文件改动、文档、配置、注释 | 直接执行 → 客观验证 → 完成 |
+| **L2 常规** | 标准 CRUD、常规功能、测试编写 | 方法论执行 → 客观验证 → 结构化评估 → 完成 |
+| **L3 复杂** | 多文件变更、架构决策、复杂重构 | 契约协商 → 方法论执行 → 结构化评估 → 完成 |
+| **L4 关键** | 核心架构、高风险、用户明确要求高质量 | 契约协商 → 迭代精炼（最多 3 轮）→ 完成 |
+
+**判断规则：**
+- 文档/注释/配置 → L1
+- acceptanceCriteria <= 2 条且不涉及多文件 → L1
+- 标准功能实现 → L2
+- acceptanceCriteria >= 4 条或涉及 3+ 文件 → L3
+- `"iterative": true` 或核心架构 → L4
+- 不确定时默认 L2
+
+复杂度等级也影响 agent 选择：L1 → trae/codex，L2 → codex，L3 → codex/claude，L4 → claude。
 
 ### 项目复盘
 
@@ -248,6 +374,47 @@ node ~/.agents/skills/acp-orchestrator/scripts/stall-detector.js /path/to/plan.j
 sessions_spawn({ runtime: "acp", agentId: "<agent>", mode: "run", streamTo: "parent", task: "..." })
 ```
 
+## Feishu 场景限制（重要）
+
+> Feishu group chat 有平台限制，不支持 ACP thread 绑定。违反这些规则会导致 agent 陷入无限轮询死循环，不发任何消息。
+
+### 禁止事项
+
+- ❌ `thread: true` — Feishu group chat 不支持，报错 "Thread bindings are unavailable for feishu"
+- ❌ `mode: "session"` — 需要 thread 绑定，同样不支持
+- ❌ 无限轮询等待 ACP 结果 — ACP session 卡住时会导致每分钟轮询 plan.json 但永远不发消息
+
+### 必须这样 spawn
+
+```json
+sessions_spawn({
+  runtime: "acp",
+  agentId: "<agent>",
+  mode: "run",
+  thread: false,
+  streamTo: "parent",
+  task: "..."
+})
+```
+
+### 超时兜底（必须执行）
+
+ACP session spawn 后，**不要无限等待**。必须有明确的超时兜底：
+
+```
+1. spawn ACP session（timeoutSeconds 建议 300-600）
+2. 等待结果，最多等 75s
+3. 75s 无输出 → 主动读取 child session history 获取结果
+4. 读不到结果 → 直接告知用户"分析进行中，稍后回复"并结束本 turn
+5. 绝不进入轮询循环
+```
+
+**红线：**
+- ❌ spawn 后每隔1分钟轮询 plan.json 等变化 — 这是死循环
+- ❌ `dispatch complete (replies=0)` 后什么都不发 — 必须给用户一个状态更新
+- ✅ 超时后主动读 sessions_history 拿结果
+- ✅ 拿不到结果就告知用户当前状态，结束 turn
+
 ## Agent 路由
 
 按类别自动选 agent。详细能力分层和对比见 `references/agent-routing.md`。
@@ -273,28 +440,7 @@ sessions_spawn({ runtime: "acp", agentId: "<agent>", mode: "run", streamTo: "par
 
 完整代码示例见 `references/usage-modes.md`。
 
-## 决策流程
-
-```
-用户请求
-    │
-    ▼
-分析任务复杂度
-    │
-    ├── 文档/注释/小改 ──────────────────► trae (quick)
-    │
-    ├── 常规功能/API/前端 ────────────────► codex (standard)
-    │
-    ├── 架构设计/复杂重构 ──────────────► claude (deep)
-    │
-    └── 多模块项目 ─────────────────────► 并行分配
-                                            │
-                                            ├── 架构 → claude
-                                            ├── 后端/前端 → codex
-                                            └── 文档 → trae
-```
-
-## 注意事项
+## Agent 路由
 
 1. **先建 plan.json 再 spawn** — 没有 plan 不允许开始执行
 2. **编码类 story 必须 TDD + 验证** — 先写测试再实现，验证通过再标完成
@@ -302,6 +448,11 @@ sessions_spawn({ runtime: "acp", agentId: "<agent>", mode: "run", streamTo: "par
 4. **默认 acp，失败才降级 subagent** — 不要预判
 5. **trae 只做文档/注释** — 编码实现用 codex
 6. **每个 turn 结束前运行自调度脚本** — 确保不会停在半路
+7. **评估与实现必须分离** — 实现 agent 不能评估自己的产出：
+   - 客观验证（跑测试）：实现 agent 自己可以做
+   - 结构化评估（打分）：必须 spawn 不同 agent
+   - acceptanceCriteria 判断：orchestrator 独立判断，不问实现 agent "你觉得满足了吗"
+   - 实现 agent 声称"所有 criteria 已满足"时，orchestrator 必须独立验证，不能直接采信
 
 ## 配置与排错
 

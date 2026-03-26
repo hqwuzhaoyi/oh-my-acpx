@@ -57,6 +57,51 @@ sessions_spawn({
 })
 ```
 
+## 结构化评估 spawn 示例
+
+**功能实现类 evaluator（注入反宽松提示）**
+```
+sessions_spawn({
+  agentId: "codex",
+  task: "你是独立评估者，不是实现者。评估以下 story 的产出：
+    Story: S-002 - 实现用户 CRUD API
+    acceptanceCriteria: ['GET/POST/PUT/DELETE 接口可用', '测试覆盖率 > 80%', '错误处理完整']
+    产出文件: src/routes/users.js, tests/users.test.js
+
+    按以下维度打分（1-5），每个维度必须给出具体理由：
+    - 正确性(40%)：接口行为是否符合 acceptanceCriteria
+    - 代码质量(30%)：命名、结构、可读性
+    - 边界处理(20%)：错误码、空值、异常路径
+    - 可维护性(10%)：是否容易扩展和修改
+
+    评分规则：5=超出预期，4=完全满足，3=基本满足但有瑕疵，2=有明显问题，1=不可接受
+    加权总分 < 3.0 → 输出 FAIL + 具体修复建议；>= 3.0 → 输出 PASS
+
+    你的职责是找问题，不是夸奖。如果你觉得'还行'，大概率应该打 3 不是 4。
+    宁可严格导致返工，也不要放过有问题的代码。"
+})
+```
+
+## 验收契约协商 spawn 示例
+
+**在正式实现前确认理解（不写代码）**
+```
+sessions_spawn({
+  agentId: "codex",
+  task: "在开始实现之前，先确认你对以下 story 的理解：
+    Story: S-002 - 实现用户 CRUD API
+    acceptanceCriteria: ['GET/POST/PUT/DELETE 接口可用', '测试覆盖率 > 80%']
+
+    请回答：
+    1. 你打算怎么实现？（1-2 句话）
+    2. acceptanceCriteria 是否有遗漏或模糊？如有，列出补充建议
+    3. 预计涉及哪些文件？
+    4. 有什么风险或依赖？
+
+    只回答以上问题，不要开始写代码。"
+})
+```
+
 ## spawn 方法论注入示例
 
 **设计类 story（brainstorming → writing-plans）**
