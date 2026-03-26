@@ -22,8 +22,8 @@
 ### 前置要求
 
 1. [OpenClaw](https://openclaw.ai) 已安装且 gateway 运行中
-2. ACP 已启用（`openclaw.json` 中 `acp.enabled: true`）
-3. acpx 插件已启用（`plugins.entries.acpx.enabled: true`）
+2. ACP 已启用（`openclaw.json` 中 `acp.allowedAgents` 已配置，见下方）
+3. acpx 插件已启用（`plugins.entries.acpx.enabled: true`，`permissionMode: "approve-all"`）
 4. 至少一个 coding agent 可用（claude / codex / trae）
 
 ### 安装
@@ -57,6 +57,38 @@ cp -r oh-my-acpx ~/.openclaw/skills/acp-orchestrator
 ```bash
 openclaw skills list | grep acp-orchestrator
 # 应显示: acp-orchestrator  ready  ...
+```
+
+### 配置 openclaw.json（必须）
+
+**`sessions_spawn` 的 ACP agent 白名单由 `acp.allowedAgents` 控制**，不是 `agents.list`。必须显式配置，否则 `sessions_spawn` 只能看到 `main`。
+
+```json
+// ~/.openclaw/openclaw.json
+{
+  "acp": {
+    "defaultAgent": "codex",
+    "allowedAgents": ["claude", "codex", "trae", "gemini"]
+  },
+  "plugins": {
+    "entries": {
+      "acpx": {
+        "enabled": true,
+        "config": {
+          "permissionMode": "approve-all"
+        }
+      }
+    }
+  }
+}
+```
+
+> **注意**：`permissionMode` 默认是 `approve-reads`，ACP agent 执行写/执行操作时会报 `Permission denied`。必须设为 `approve-all`。
+
+配置后重启 OpenClaw：
+
+```bash
+pkill -f openclaw && openclaw serve --daemon
 ```
 
 ### 配置 acpx（如需自定义 agent）

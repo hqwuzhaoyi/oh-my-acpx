@@ -862,8 +862,54 @@ sessions_spawn({
 
 ## 配置参考
 
+### openclaw.json（关键，否则 sessions_spawn 无法找到 ACP agent）
+
 ```json
-// ~/.acpx/config.json
+// ~/.openclaw/openclaw.json
+{
+  // 1. acp.allowedAgents 控制 sessions_spawn 能调用哪些 ACP agent
+  //    注意：这和 agents.list 是两套独立系统，sessions_spawn 只看这里
+  "acp": {
+    "defaultAgent": "codex",
+    "allowedAgents": ["claude", "codex", "trae", "gemini"]
+  },
+
+  // 2. acpx permissionMode 必须设为 approve-all
+  //    默认值是 approve-reads，会导致 ACP agent 执行写/执行操作时被拒
+  "plugins": {
+    "entries": {
+      "acpx": {
+        "enabled": true,
+        "config": {
+          "permissionMode": "approve-all"
+        }
+      }
+    }
+  },
+
+  // 3. agents.list 中注册持久化 ACP agent（可选，减少冷启动延迟）
+  "agents": {
+    "list": [
+      { "id": "claude", "runtime": { "type": "acp", "acp": { "agent": "claude", "backend": "acpx", "mode": "persistent" } } },
+      { "id": "codex",  "runtime": { "type": "acp", "acp": { "agent": "codex",  "backend": "acpx", "mode": "persistent" } } },
+      { "id": "trae",   "runtime": { "type": "acp", "acp": { "agent": "trae",   "backend": "acpx", "mode": "persistent" } } },
+      { "id": "gemini", "runtime": { "type": "acp", "acp": { "agent": "gemini", "backend": "acpx", "mode": "persistent" } } }
+    ]
+  }
+}
+```
+
+**常见问题：sessions_spawn 只看到 `main`，看不到其他 agent**
+- 原因：`acp.allowedAgents` 未配置，或未重启 OpenClaw
+- 修复：加上 `acp.allowedAgents` 并重启：`pkill -f openclaw && openclaw serve --daemon`
+
+**常见问题：ACP agent 执行时报 Permission denied**
+- 原因：`permissionMode` 默认是 `approve-reads`，写/执行操作被拒
+- 修复：设置 `plugins.entries.acpx.config.permissionMode: "approve-all"`
+
+### ~/.acpx/config.json
+
+```json
 {
   "defaultAgent": "codex",
   "defaultPermissions": "approve-all",
