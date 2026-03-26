@@ -42,21 +42,76 @@ description: "Multi-agent task orchestration using OpenClaw ACP runtime. Automat
 完成 story N
     │
     ▼
+提取 agent 输出，生成执行摘要
+    │
+    ▼
+输出摘要给用户（不等确认）+ 写入 plan.json notes
+    │
+    ▼
 更新 plan.json（passes: true）
     │
     ▼
 读 plan.json → 还有 passes: false 的 story？
     │
-    ├── 有 → 立即开始下一个（不要输出"建议下一步做 X"然后等用户说继续）
+    ├── 有 → 立即开始下一个（不要等用户说继续）
     │
-    └── 没有 → 项目完成，汇报最终结果
+    └── 没有 → 项目完成，输出最终汇总
 ```
 
 **红线：以下行为是错误的，必须避免：**
 - ❌ "S-001 已完成，建议下一步做 S-002，需要我继续吗？" — 不要问，直接做
 - ❌ "下一步最合理的动作是..." 然后停下 — 不要停，直接执行
 - ❌ 完成分析后只输出建议而不执行 — 你是执行者，不是顾问
-- ✅ "S-001 completed. 继续 S-002..." 然后立即开始执行
+- ❌ agent 做完了直接跳到下一个，用户完全不知道发生了什么 — 必须先输出摘要
+- ✅ 输出摘要 → 立即开始下一个（摘要和继续在同一条回复中）
+
+### Story 完成汇报（每个 story 必须）
+
+**每个 story 完成后，必须输出一段结构化摘要，让用户知道 agent 做了什么。这不是可选的，是强制步骤。**
+
+**汇报模板：**
+
+```
+✅ S-001: 设计博客系统架构
+  agent: claude | runtime: acp | 耗时: ~45s
+  产出:
+    - 输出了数据模型设计（User, Post, Comment 三表）
+    - 定义了 12 个 REST API 接口
+    - 架构文档写入 docs/architecture.md
+  文件变更: docs/architecture.md (新增), docs/api-spec.md (新增)
+  验证: acceptanceCriteria 2/2 通过
+  ──────────────────────────
+  继续 S-002: 实现后端 API...
+```
+
+**汇报规则：**
+
+1. **从 agent 输出中提取**，不要编造。`sessions_yield` 返回的内容就是 agent 的实际产出，从中提取关键信息
+2. **必须包含以下字段**：
+   - story id + title
+   - 使用的 agent 和 runtime
+   - 关键产出（做了什么，2-4 条）
+   - 文件变更（新增/修改了哪些文件）
+   - 验证结果（acceptanceCriteria 通过情况）
+3. **写入 plan.json notes**：把摘要精简版写入该 story 的 `notes` 字段，方便后续回溯
+4. **不要等用户确认**：输出摘要后立即继续下一个 story，摘要和继续动作在同一条回复中
+5. **agent 输出为空或 stall 时**：汇报降级情况，说明走了哪条兜底链路，最终是否拿到结果
+
+**反面示例 vs 正面示例：**
+
+```
+❌ 错误（无汇报直接跳）:
+"S-001 done. 开始 S-002..."
+
+❌ 错误（汇报后等确认）:
+"S-001 完成，产出了架构文档。需要我继续 S-002 吗？"
+
+✅ 正确（汇报 + 立即继续）:
+"✅ S-001: 设计架构
+  agent: claude | 产出: 数据模型 + API 定义 | 文件: docs/architecture.md
+  验证: 2/2 通过
+  继续 S-002: 实现后端 API..."
+```
 
 ### 跨 Turn 自调度（飞书/聊天场景必读）
 
@@ -178,10 +233,13 @@ openclaw system event --text "继续执行 plan.json：读取项目根目录的 
 │       └── 通过 → 编码类 story？
 │                   │
 │                   ├── 是 → spawn reviewer → review 通过？
-│                   │                           ├── 是 → passes: true
+│                   │                           ├── 是 → 输出执行摘要
 │                   │                           └── 否 → 修复 → 重新验证+review
 │                   │
-│                   └── 否 → passes: true
+│                   └── 否 → 输出执行摘要
+│       │
+│       ▼
+│   摘要写入 notes + passes: true
 │       │
 │       ▼
 │   还有 passes: false 的 stories？
