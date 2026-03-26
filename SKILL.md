@@ -22,12 +22,17 @@ description: "Multi-agent task orchestration using OpenClaw ACP runtime. Automat
 ### 核心规则
 
 1. **先建 plan 再动手** — 分析完需求后，第一步是创建 `plan.json`，不是直接 spawn agent
-2. **每完成一个 story 就更新** — `status: "pending"` → `"in_progress"` → `"completed"`
-3. **自动继续，不要停** — 完成一个 story 后，立即读 plan.json 找下一个 `passes: false` 的 story 并执行，**不要等用户确认**。只有以下情况才允许停下来问用户：
+2. **每完成一个 story 就更新** — 把该 story 标记为 `passes: true`，并在必要时补充 `notes`
+3. **执行模式 vs 诊断模式必须分清** — 先判断用户当前要你做的是继续执行，还是排障分析：
+   - **执行模式**（继续推进）关键词：`继续`、`按 plan 往下做`、`推进下一个 story`、`直接执行`、`不要汇报`
+     - 行为：读取 `plan.json` → 找最高优先级 `passes: false` story → 直接执行
+   - **诊断模式**（排障/解释）关键词：`为什么没继续`、`哪里出错`、`看日志`、`调研原因`
+     - 行为：只分析日志/plan 状态并给出原因，**不要自动推进 story**
+4. **自动继续，不要停** — 仅在**执行模式**下生效：完成一个 story 后，立即读 plan.json 找下一个 `passes: false` 的 story 并执行，**不要等用户确认**。只有以下情况才允许停下来问用户：
    - 所有 stories 都已 `passes: true`（项目完成）
    - 当前 story 被阻塞且无法自行解决（如缺少外部输入）
    - 遇到不可恢复的错误
-4. **plan.json 存项目根目录** — 所有模式共用同一个文件
+5. **plan.json 存项目根目录** — 所有模式共用同一个文件
 
 ### 自动循环（关键）
 
@@ -57,34 +62,46 @@ description: "Multi-agent task orchestration using OpenClaw ACP runtime. Automat
 
 **问题：** 在飞书等聊天场景中，每条用户消息只触发一个 agent turn。如果一个 story 耗尽了当前 turn 的时间/token，agent 会被迫停下，无法自动继续下一个 story。
 
-**解决方案：在 turn 结束前，用 `system event` 给自己发一条消息触发下一轮。**
+**解决方案：在执行模式下，如果本 turn 没能继续 spawn 下一个 `passes: false` story，就必须在 turn 结束前用 `system event` 给自己发一条消息触发下一轮。**
 
 ```bash
-# 在当前 turn 即将结束时执行：
-openclaw system event --text "继续执行 plan.json：读取项目根目录的 plan.json，找最高优先级 pending story，按 acp-orchestrator skill 执行。" --mode now
+# 在当前 turn 结束前执行：
+openclaw system event --text "继续执行 plan.json：读取项目根目录的 plan.json，找最高优先级 passes:false 的 story，按 acp-orchestrator skill 继续执行。" --mode now
 ```
 
-**执行规则：**
+**硬性规则：**
 
 1. 每完成一个 story 后，先更新 plan.json
 2. 检查是否还有 `passes: false` 的 stories
-3. 如果有，且当前 turn 还有余量 → 直接在本 turn 继续执行
-4. 如果有，但当前 turn 即将超时或 token 不足 → **必须在回复用户前调用 `system event` 触发下一轮**
-5. 如果没有 → 项目完成，不需要触发
+3. 如果没有 → 项目完成，不需要触发
+4. 如果有，且本 turn 已经直接开始执行下一个 story → 不需要触发
+5. 如果有，但本 turn **没有**开始执行下一个 story（无论原因是快超时、token 不足、review 太长、还是回复用户汇报） → **必须在回复用户前调用 `system event`**
 
-**关键：不要在回复中说"我会继续"然后期望用户来触发。你必须自己触发。**
+**这不是建议，是必须执行的收尾动作。**
 
 ```
-当前 turn 即将结束
+执行模式下，当前 turn 即将结束
     │
     ▼
 还有 passes: false 的 stories？
     │
-    ├── 有 → exec: openclaw system event --text "继续 plan.json" --mode now
-    │         然后回复用户："S-001 done, 已触发下一轮继续 S-002"
+    ├── 没有 → 回复用户："所有 stories 完成"
     │
-    └── 没有 → 回复用户："所有 stories 完成"
+    └── 有
+         │
+         ├── 本 turn 已直接开始下一个 story → 正常继续，不触发
+         │
+         └── 本 turn 未开始下一个 story
+              │
+              ├── 必须 exec: openclaw system event --text "继续 plan.json" --mode now
+              └── 然后才能回复用户："已触发下一轮继续执行"
 ```
+
+**红线：**
+- ❌ 还有 `passes: false`，但只是汇报状态，不触发下一轮
+- ❌ 说"我会继续"，但没执行 `system event`
+- ❌ 执行模式下把自己退化成诊断模式，只读 plan 不推进
+- ✅ 如果没法在本 turn 继续做，就先触发下一轮，再回复
 
 ### plan.json 结构
 
