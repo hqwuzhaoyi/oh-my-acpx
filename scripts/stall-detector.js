@@ -121,8 +121,10 @@ function check() {
   const msg = [
     `plan.json 检测到 stall（${elapsed}s 无进展）。`,
     `下一个 story: ${next.id}: ${next.title}。`,
-    `请立即用 sessions_spawn 执行，不要只汇报状态。`,
+    `请用 sessions_spawn 执行（注意：system event 没有 channel context，`,
+    `必须用 mode:"run" 且不带 thread:true，否则会报错）。`,
     `如果上一个 ACP session 已 dead/stalled，请重新 spawn。`,
+    `不要只汇报状态，直接执行。`,
   ].join(' ');
 
   try {

@@ -242,6 +242,12 @@ node ~/.agents/skills/acp-orchestrator/scripts/stall-detector.js /path/to/plan.j
 - 超过阈值无变化 → 发送 `openclaw system event` 要求继续执行
 - 最多自动恢复 3 次，避免死循环
 
+**system event 触发的 spawn 限制：**
+通过 `system event` 触发的 turn 没有飞书 channel context，spawn 时**不能**用 `thread:true` 或 `mode:"session"`，否则会报错。必须用：
+```json
+sessions_spawn({ runtime: "acp", agentId: "<agent>", mode: "run", streamTo: "parent", task: "..." })
+```
+
 ## Agent 路由
 
 按类别自动选 agent。详细能力分层和对比见 `references/agent-routing.md`。
