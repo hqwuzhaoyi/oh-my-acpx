@@ -1,11 +1,11 @@
 ---
 name: acp-orchestrator
-description: "Use when user requests multi-agent task execution, parallel coding, or task decomposition across agents. Triggers: '用多个agent', '并行处理', '分派任务', 'multi-agent', 'parallel agents', 'orchestrate', 'oh my acpx', '帮我拆任务', 'dispatch to agents'."
+description: "Use when user requests multi-agent task execution, parallel coding, or task decomposition across agents. Not for single-agent tasks without orchestration (use the agent directly). Not for plan creation alone (use writing-plans). Triggers: '用多个agent', '并行处理', '分派任务', 'multi-agent', 'parallel agents', 'orchestrate', 'oh my acpx', '帮我拆任务', 'dispatch to agents'."
 ---
 
-# Oh My ACPX - Multi-Agent Orchestration
+**Audience:** Developers orchestrating complex tasks across multiple AI agents (claude, codex, trae, gemini) via OpenClaw ACP runtime.
 
-> 智能路由，按能力分层，高效并行。
+**Goal:** Decompose user requirements into plan.json stories, route each to the best agent with appropriate methodology, execute with quality gates, and track progress to completion.
 
 ## 核心原则
 
@@ -115,18 +115,15 @@ description: "Use when user requests multi-agent task execution, parallel coding
 
 ### Story 完成汇报（每个 story 必须）
 
-每个 story 完成后，输出结构化摘要：
+每个 story 完成后，输出结构化摘要。完整模板见 `references/story-completion-report.md`。简版示例：
 
 ```
-✅ S-001: 设计博客系统架构
+S-001: 设计博客系统架构
   agent: claude | runtime: acp | 耗时: ~45s
-  产出:
-    - 输出了数据模型设计（User, Post, Comment 三表）
-    - 定义了 12 个 REST API 接口
+  产出: 数据模型设计（3表）+ 12 个 REST API 定义
   文件变更: docs/architecture.md (新增)
   验证: acceptanceCriteria 2/2 通过
-  ──────────────────────────
-  继续 S-002: 实现后端 API...
+  继续 S-002...
 ```
 
 从 `sessions_yield` 返回的实际产出中提取，不要编造。摘要精简版写入 plan.json `notes` 字段。
@@ -210,119 +207,21 @@ sessions_spawn({
 
 更多示例（设计类、Bug 修复类）见 `references/examples.md`。
 
-### 完成验证与结构化评估
+### 完成验证与质量门禁
 
 每个 story 标记 `passes: true` 之前，必须通过两层验证：
 
-**第一层：客观验证（所有 story）** — 运行测试/构建命令，检查 acceptanceCriteria 全部满足。❌ agent 说"已完成"不算，✅ 看到绿灯才能进入第二层。
+**第一层：客观验证（所有 story）** — 运行测试/构建命令，检查 acceptanceCriteria 全部满足。agent 说"已完成"不算，看到绿灯才能进入第二层。
 
-**第二层：结构化评估（编码类/设计类）** — spawn 独立 evaluator agent（不能是执行该 story 的同一个 agent），按维度 1-5 打分：
+**第二层：结构化评估（L2+ story）** — 详见 `references/generator-evaluator.md`。核心规则：spawn 独立 evaluator agent（不同于实现 agent），按维度 1-5 打分，加权总分 >= 3.0 为 PASS。
 
-| Story 类型 | 评估维度 |
-|---|---|
-| 功能实现 | 正确性(40%) + 代码质量(30%) + 边界处理(20%) + 可维护性(10%) |
-| 架构设计 | 合理性(35%) + 可扩展性(25%) + 简洁性(25%) + 风险识别(15%) |
-| Bug 修复 | 根因准确(40%) + 修复完整性(30%) + 回归风险(20%) + 测试覆盖(10%) |
-| 重构 | 行为保持(40%) + 结构改善(30%) + 测试覆盖(20%) + 简洁性(10%) |
+**高风险 story 迭代精炼** — 标记 `"iterative": true` 的 story 通过多轮 generate-evaluate 循环提升质量。详见 `references/iterative-refinement.md`。最多 3 轮，分数不提升则停止。
 
-**evaluator spawn 指令必须包含反宽松提示：**
-> "你的职责是找问题，不是夸奖。如果你觉得'还行'，大概率应该打 3 不是 4。宁可严格导致返工，也不要放过有问题的代码。"
+**验收契约协商（L3/L4 story 推荐）** — 实现前确认 agent 理解，减少返工。详见 `references/acceptance-contract.md`。
 
-**评估结果处理：**
-- 加权总分 >= 3.0 → PASS → 标记 passes: true
-- 加权总分 < 3.0 → FAIL → 将评估反馈注入下一轮 task，重新 spawn 实现 agent 修复
-- 修复后重新评估，最多 2 轮（第 3 轮强制 PASS，在 notes 中记录遗留问题）
-- 文档类 story 跳过第二层评估
+**自适应复杂度** — 根据 story 特征自动选择 L1-L4 流程深度。详见 `references/adaptive-complexity.md`。简单任务跳过评估，复杂任务加契约协商，关键任务启用迭代精炼。
 
-### 迭代精炼（高风险 story 专用）
-
-> 灵感来源：Generator-Evaluator 迭代模式。普通 story 单次执行即可，高风险 story 通过多轮 generate→evaluate 循环显著提升质量。
-
-#### 何时启用
-
-在 plan.json story 中添加 `"iterative": true`（满足任一条件即标记）：
-
-| 条件 | 示例 |
-|---|---|
-| 核心架构决策，影响后续所有 story | 数据模型设计、认证架构 |
-| 用户明确要求高质量 | "这个要做好"、"仔细设计" |
-| 涉及 3+ 文件的复杂变更 | 大规模重构 |
-| 之前同类 story 评估不通过 | 第二次尝试 |
-
-#### 迭代流程
-
-1. 按正常方法论 spawn 实现 agent
-2. spawn evaluator 做结构化评估（见上节）
-3. 总分 >= 4.0 → 完成 | 3.0-4.0 → 再迭代一轮 | < 3.0 → 再迭代
-4. 最多 3 轮（ACP 超时和成本约束）
-5. 第 2 轮分数没有提升 → 停止，接受当前结果
-6. 每轮评估反馈必须具体：不是"做得更好"，而是"第 47 行缺少 timeout case"
-
-#### plan.json 扩展字段（可选，向后兼容）
-
-```json
-{
-  "iterative": true,
-  "iterationCount": 0,
-  "lastScore": null
-}
-```
-
-### 验收契约协商（编码类 story 推荐）
-
-> 问题：orchestrator 写的 acceptanceCriteria 可能太模糊，实现 agent 按自己理解做完后才发现偏差。
-
-#### 流程（在正式实现前，轻量级确认）
-
-```
-sessions_spawn({
-  agentId: "<agent>",
-  task: "在开始实现之前，先确认你对以下 story 的理解：
-    Story: {title}
-    acceptanceCriteria: {criteria}
-
-    请回答：
-    1. 你打算怎么实现？（1-2 句话）
-    2. acceptanceCriteria 是否有遗漏或模糊？如有，列出补充建议
-    3. 预计涉及哪些文件？
-    4. 有什么风险或依赖？
-
-    只回答以上问题，不要开始写代码。"
-})
-```
-
-orchestrator 审查回复：理解正确 → 更新 criteria（如有补充）→ spawn 正式实现；理解偏差 → 修正后重新确认（最多 1 轮）。
-
-#### 跳过条件
-
-- quick 类 story（文档、注释）
-- acceptanceCriteria 已含文件路径或函数签名
-- 同一 agent 刚完成了相关 story，已有上下文
-
-### 自适应复杂度（Adaptive Complexity）
-
-> 原则：harness 复杂度应匹配任务难度。简单任务加太多流程是浪费，复杂任务流程不够会出质量问题。
-
-| 等级 | 判断标准 | 执行流程 |
-|---|---|---|
-| **L1 简单** | 单文件改动、文档、配置、注释 | 直接执行 → 客观验证 → 完成 |
-| **L2 常规** | 标准 CRUD、常规功能、测试编写 | 方法论执行 → 客观验证 → 结构化评估 → 完成 |
-| **L3 复杂** | 多文件变更、架构决策、复杂重构 | 契约协商 → 方法论执行 → 结构化评估 → 完成 |
-| **L4 关键** | 核心架构、高风险、用户明确要求高质量 | 契约协商 → 迭代精炼（最多 3 轮）→ 完成 |
-
-**判断规则：**
-- 文档/注释/配置 → L1
-- acceptanceCriteria <= 2 条且不涉及多文件 → L1
-- 标准功能实现 → L2
-- acceptanceCriteria >= 4 条或涉及 3+ 文件 → L3
-- `"iterative": true` 或核心架构 → L4
-- 不确定时默认 L2
-
-复杂度等级也影响 agent 选择：L1 → trae/codex，L2 → codex，L3 → codex/claude，L4 → claude。
-
-### 项目复盘
-
-所有 stories 完成后，写入 `retrospective` 字段：执行摘要、agent 选择是否合适、方法论效果、改进点。
+**Story 完成汇报** — 每个 story 完成后输出结构化报告。详见 `references/story-completion-report.md`。
 
 ## 运行时路由策略
 
@@ -422,9 +321,9 @@ ACP session spawn 后，**不要无限等待**。必须有明确的超时兜底�
 | 类别 | 首选 | 备选 |
 |---|---|---|
 | ultrabrain / deep | claude | codex |
-| standard / explore | codex | claude / gemini |
-| visual-engineering / writing | gemini | codex |
-| quick | trae | gemini |
+| standard / explore | codex | claude |
+| visual-engineering / writing | codex | - |
+| quick | trae | codex |
 
 ## 使用模式
 
@@ -440,7 +339,7 @@ ACP session spawn 后，**不要无限等待**。必须有明确的超时兜底�
 
 完整代码示例见 `references/usage-modes.md`。
 
-## Agent 路由
+## 执行规则
 
 1. **先建 plan.json 再 spawn** — 没有 plan 不允许开始执行
 2. **编码类 story 必须 TDD + 验证** — 先写测试再实现，验证通过再标完成
@@ -448,11 +347,7 @@ ACP session spawn 后，**不要无限等待**。必须有明确的超时兜底�
 4. **默认 acp，失败才降级 subagent** — 不要预判
 5. **trae 只做文档/注释** — 编码实现用 codex
 6. **每个 turn 结束前运行自调度脚本** — 确保不会停在半路
-7. **评估与实现必须分离** — 实现 agent 不能评估自己的产出：
-   - 客观验证（跑测试）：实现 agent 自己可以做
-   - 结构化评估（打分）：必须 spawn 不同 agent
-   - acceptanceCriteria 判断：orchestrator 独立判断，不问实现 agent "你觉得满足了吗"
-   - 实现 agent 声称"所有 criteria 已满足"时，orchestrator 必须独立验证，不能直接采信
+7. **评估与实现必须分离** — 详见 `references/generator-evaluator.md`
 
 ## 配置与排错
 
@@ -472,3 +367,8 @@ ACP session spawn 后，**不要无限等待**。必须有明确的超时兜底�
 | `references/acp-fallback.md` | ACP relay stall 5 步兜底流程 |
 | `references/config.md` | openclaw.json / acpx 配置模板 + 错误排查 |
 | `references/examples.md` | 实战示例 + spawn 方法论注入示例 |
+| `references/generator-evaluator.md` | 独立结构化评估（打分维度、反宽松提示、PASS/FAIL 规则） |
+| `references/iterative-refinement.md` | 多轮 generate-evaluate 迭代精炼（L4 story） |
+| `references/acceptance-contract.md` | 实现前验收契约协商（L3/L4 story） |
+| `references/adaptive-complexity.md` | L1-L4 自适应复杂度判断与流程选择 |
+| `references/story-completion-report.md` | Story 完成后结构化汇报模板 |
