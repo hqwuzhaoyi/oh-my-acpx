@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "objective": "Use OMA to output hello and verify the ACPX persistent session exists.",
+  "tasks": [
+    {
+      "id": "hello-output-session-exists-qoder",
+      "title": "Output hello and verify ACPX session persistence",
+      "status": "completed",
+      "contextBudget": {
+        "maxTokens": 300,
+        "rationale": "A one-line hello response is enough to verify OMA output and ACPX session persistence."
+      },
+      "route": {
+        "runtime": "acpx",
+        "agent": "qoder",
+        "role": "visual",
+        "sessionName": "oma-hello-output-session-exists-qoder"
+      },
+      "prompt": "Reply with exactly one word: hello",
+      "expectedReturn": "AuxiliaryTaskReturn",
+      "modifiedFiles": []
+    }
+  ]
+}
