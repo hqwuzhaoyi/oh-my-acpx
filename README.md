@@ -17,8 +17,10 @@ npm install
 npm run build
 node dist/src/cli/index.js setup
 node dist/src/cli/index.js install
+node dist/src/cli/index.js acpx init
 node dist/src/cli/index.js run .oma/plans/plan.json
 node dist/src/cli/index.js run .oma/plans/plan.json --execute
+node dist/src/cli/index.js result show <task-id>
 node dist/src/cli/index.js schema
 ```
 
@@ -27,16 +29,20 @@ After installing the package binary, the same flow is:
 ```bash
 oma setup
 oma install
+oma acpx init
 oma run .oma/plans/plan.json
 oma run .oma/plans/plan.json --execute
+oma result show <task-id>
 oma schema
 ```
 
 `oma run` returns an **Offload Proposal** by default. It does not call ACPX.
 
-`oma run --execute` enters **Execute Mode**. In this rebuild, Execute Mode uses fake/local execution only and returns an **Auxiliary Task Return**. Real ACPX spawning should be added later behind the same contract.
+`oma run --execute` enters **Execute Mode**. It can use fake/local execution for declared local outputs, or an `acpx` route to delegate the Auxiliary Task through ACPX and return an **Auxiliary Task Return** with command evidence.
 
-`oma install` starts the interactive `skills` installer for every skill under `skills/` by running `npx skills@latest add <oma>/skills --full-depth`.
+For ACPX routes, run `oma acpx init` and approve an **Approved Agent** before Execute Mode. ACPX routes may set `route.timeoutSeconds`; if omitted, OMA uses 180 seconds. OMA captures schema-valid **Auxiliary Task Returns** first, then clear final assistant answers from trusted session history, and keeps complete captured content available through `oma result show <task-id>`.
+
+`oma install` starts the interactive `skills` installer for every skill under `skills/` by running `npx skills@latest add <oma>/skills --full-depth -f`.
 
 ## Offload Plan
 
@@ -51,6 +57,8 @@ Each **Auxiliary Task** declares:
 - prompt/payload for the runtime
 - expected return contract
 - read and modified file scope when known
+
+An `acpx` route may include `sessionName` for persistent ACPX sessions and `timeoutSeconds` for long-running bounded work.
 
 ## Return Contract
 
@@ -90,14 +98,15 @@ In scope for this MVP:
 
 - proposal-first `oma run`
 - interactive installation for all skills under `skills/` with `oma install`
-- explicit fake/local `oma run --execute`
+- explicit `oma run --execute` with fake/local or ACPX-backed routes
 - unified **Auxiliary Task Return**
+- `oma result show <task-id>` for **Auxiliary Result Inspection**
 - `oma schema`
 - small TypeScript core modules and CLI
 
 Out of scope for this MVP:
 
-- real ACPX spawning
+- broad ACPX provider abstraction
 - full team/swarm orchestration
 - UI/HUD in OMA core
 - broad autopilot behavior

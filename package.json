@@ -9,6 +9,7 @@
   },
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.json",
+    "prepublishOnly": "npm run build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test dist/tests/unit/*.js",
     "setup": "npm run build && node dist/src/cli/index.js setup"

@@ -10,8 +10,7 @@ export function buildAuxiliaryTaskReturn(
     verdict: "provisional_accept",
     hostPlanComplete: false,
     auxiliaryTaskId: task.id,
-    summary:
-      "Auxiliary Task completed through fake/local Execute Mode. Real ACPX spawning is intentionally out of scope for this rebuild.",
+    summary: "Auxiliary Task completed through fake/local Execute Mode.",
     scope: {
       readFiles: task.readFiles ?? [],
       modifiedFiles: task.modifiedFiles ?? [],
@@ -30,7 +29,7 @@ export function buildAuxiliaryTaskReturn(
     ],
     blockers: [],
     findings: [`Offload Plan objective preserved for Host Agent integration: ${plan.objective}`],
-    followups: ["Replace fake/local execution with ACPX transport behind the same Execute Mode contract."],
+    followups: ["Use an acpx route when the Host Agent wants the task executed by ACPX behind the same return contract."],
     coordinationAdvice: {
       recommendedAction: "accept",
       reason:

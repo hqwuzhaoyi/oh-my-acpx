@@ -8,6 +8,9 @@ export interface ContextBudget {
 export interface OffloadRoute {
   runtime: string;
   agent: string;
+  role?: string;
+  sessionName?: string;
+  timeoutSeconds?: number;
 }
 
 export interface AuxiliaryTask {
@@ -30,6 +33,18 @@ export interface OffloadPlan {
   version: number;
   objective: string;
   tasks: AuxiliaryTask[];
+}
+
+export interface ApprovedAgentConfig {
+  version: number;
+  approvedAgents: Record<
+    string,
+    {
+      approved: true;
+      role: "quick" | "deep" | "visual";
+      permissions: "read" | "edit";
+    }
+  >;
 }
 
 export type LoadOffloadPlanResult =

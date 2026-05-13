@@ -123,6 +123,13 @@ function validateAuxiliaryTask(value: unknown, index: number): string[] {
   if (!isRecord(task.route) || typeof task.route.agent !== "string") {
     errors.push(`Auxiliary Task ${index} route.agent must be a string.`);
   }
+  if (
+    isRecord(task.route)
+    && task.route.timeoutSeconds !== undefined
+    && (!Number.isFinite(task.route.timeoutSeconds) || task.route.timeoutSeconds <= 0)
+  ) {
+    errors.push(`Auxiliary Task ${index} route.timeoutSeconds must be a positive number when provided.`);
+  }
   if (typeof task.prompt !== "string" || task.prompt.length === 0) {
     errors.push(`Auxiliary Task ${index} prompt must be a non-empty string.`);
   }
