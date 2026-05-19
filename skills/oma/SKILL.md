@@ -9,19 +9,20 @@ Use OMA only when you are the **Host Agent** and you want to offload a bounded *
 
 ## Onboarding Gate
 
-Before creating, modifying, or executing any Offload Plan, the Host Agent must verify that ACPX-backed agents have been approved through the `oma-acpx-init` skill.
+Before executing an ACPX-backed Offload Plan, the Host Agent must verify that ACPX-backed agents have been approved through the `oma-acpx-init` skill.
 
 Rules:
 
-- If no valid Approved Agents config exists at `~/.oma/config/agents.json` or `.oma/config/agents.json`, must use the `oma-acpx-init` skill before creating an **Offload Plan**.
+- `oma setup`, `oma schema`, proposal-only `oma run`, reading/explaining an existing plan, and fake/local execution are allowed before onboarding.
+- If no valid Approved Agents config exists at `~/.oma/config/agents.json` or `.oma/config/agents.json`, must use the `oma-acpx-init` skill before `oma run <plan-path> --execute` for an `acpx` route.
 - Before asking for approval or proposing `oma acpx approve`, summarize the current approval state: project config path/status, global config path/status, existing Approved Agents, and discovered Declared ACPX adapters.
 - Treat Declared ACPX adapters as candidates only. They are not user-usable agents until the user confirms they are configured and usable in this environment, then explicitly approves them for OMA.
 - When approval is needed, show the current optional choices before recommending a command: candidate adapter names, roles (`quick`, `deep`, `visual`), permissions (`read`, `edit`), and scope (`project`, `global`).
 - Do not guess `route.agent` from model preference, defaults, or examples. Plan routes must come from Approved Agents.
-- Do not create or rewrite an Offload Plan route until the installed/approved ACPX agents are known.
-- Do not run `oma run <plan-path> --execute` until this gate passes.
-- `oma setup`, `oma schema`, reading/explaining an existing plan, and pure documentation work are allowed before onboarding.
-- A fake-local test plan is allowed before onboarding only when the user explicitly asks for fake-local behavior.
+- Do not create or rewrite an ACPX Offload Plan route until the installed/approved ACPX agents are known.
+- Do not run ACPX-backed `oma run <plan-path> --execute` until this gate passes.
+- Prefer `--scope project` for team repositories. Global approvals cross project boundaries.
+- Use `permissions: edit` for agents that need shell-backed reads even for read-only audits; `permissions: read` maps to ACPX `--approve-reads` and may reject shell tool calls.
 
 Route selection after onboarding:
 
@@ -51,7 +52,7 @@ Use this command flow when the **Host Agent** chooses to use OMA:
 ```bash
 oma setup
 oma acpx init
-oma acpx approve --agent codex --role deep --permissions edit
+oma acpx approve --agent codex --role deep --permissions edit --scope project
 oma run .oma/plans/plan.json
 oma run .oma/plans/plan.json --execute
 oma result show <task-id>
@@ -90,7 +91,7 @@ If all tasks are done, treat `ALL_DONE` as "no auxiliary work remains"; do not c
 
 ### `oma acpx init`
 
-Use the `oma-acpx-init` skill before creating, modifying, or executing Offload Plans when the project has not approved agents yet. The CLI command itself is non-interactive discovery/status; the skill owns user approval and calls scriptable approval commands.
+Use the `oma-acpx-init` skill before executing ACPX-backed Offload Plans or creating/revising ACPX routes when the project has not approved agents yet. Proposal-only planning, fake/local execution, and schema checks do not require onboarding. The CLI command itself is non-interactive discovery/status; the skill owns user approval and calls scriptable approval commands.
 
 Expected behavior:
 
@@ -99,8 +100,8 @@ Expected behavior:
 - The Host Agent reports current configuration before asking for changes
 - The Host Agent lists available choices before recommending approval
 - `oma acpx approve --agent <name> --role <role> --permissions <read|edit>` persists explicit approval
-- Writes global Approved Agent config at `~/.oma/config/agents.json`
-- Allows project-specific override config at `.oma/config/agents.json`
+- Writes project Approved Agent config at `.oma/config/agents.json` by default
+- Allows explicit global config at `~/.oma/config/agents.json` with `--scope global`
 - Distinguishes declared/configured/verified agents from **Approved Agents**
 - Does not execute an **Auxiliary Task**
 - Does not mutate an **Offload Plan**
@@ -119,7 +120,8 @@ Expected behavior in this MVP:
 - Returns a unified **Auxiliary Task Return**
 - Performs **Auxiliary Return Capture** from trusted `sessions history` first, then stdout fallback
 - Writes long detail and captured answers under `.oma/artifacts/`
-- Writes the declared local output files from `localOutputs`
+- Writes declared `localOutputs` itself for fake/local routes; for ACPX routes, includes those outputs in the delegated prompt and relies on result verification before Host integration
+- Marks the task completed in the plan only for `completed` + `provisional_accept` + `accept`; `revise`/`retry` stays pending for follow-up
 - Records ACPX session evidence for prompt-session executions
 - Keeps `status` separate from `verdict`
 - Keeps `hostPlanComplete` false
@@ -148,8 +150,8 @@ For `acpx` routes, use persistent ACPX prompt sessions so the work is observable
 Rules:
 
 - Do not use `exec` for OMA **Auxiliary Tasks**. `exec` is a one-shot temporary ACP session and does not preserve persistent session state.
-- Create or reuse a named ACPX session before sending the prompt.
-- Use a stable session name, preferably from `route.sessionName`; otherwise derive `oma-<auxiliary-task-id>`.
+- Create a named ACPX session before sending the prompt.
+- Use `route.sessionName` as the session-name prefix; OMA appends the current `runId` so each execution gets a fresh observable session instead of inheriting stale assistant context.
 - Use `route.timeoutSeconds` when provided; otherwise OMA uses the default ACPX prompt timeout of 180 seconds.
 - Send the task prompt through `-s <session-name>` or `--session <session-name>`.
 - After execution, collect `sessions show <session-name>` and `sessions history <session-name>` output when available.
@@ -160,10 +162,10 @@ Rules:
 Expected command shape:
 
 ```bash
-acpx --cwd <workspace> <agent> sessions ensure --name <session-name>
-acpx --cwd <workspace> --approve-all --timeout <route.timeoutSeconds-or-180> <agent> -s <session-name> "<prompt>"
-acpx --cwd <workspace> <agent> sessions show <session-name>
-acpx --cwd <workspace> <agent> sessions history <session-name> --limit 20
+acpx --cwd <workspace> <agent> sessions ensure --name <session-name>-<runId>
+acpx --cwd <workspace> --approve-all --timeout <route.timeoutSeconds-or-180> <agent> -s <session-name>-<runId> "<prompt>"
+acpx --cwd <workspace> <agent> sessions show <session-name>-<runId>
+acpx --cwd <workspace> <agent> sessions history <session-name>-<runId> --limit 20
 ```
 
 Use `--approve-reads` instead of `--approve-all` when the Approved Agent permission is `read`.
@@ -173,6 +175,8 @@ Use `--approve-reads` instead of `--approve-all` when the Approved Agent permiss
 Use these rules when interpreting `oma run --execute` results:
 
 - Prefer a schema-valid **Auxiliary Task Return** for the active `auxiliaryTaskId` from trusted session history, then stdout.
+- Each ACPX prompt carries an OMA `runId`; when session history includes that marker, ignore older history before the current run to avoid stale result capture from reused sessions.
+- If a schema return includes `runId`, it must match the current run.
 - If multiple matching schema returns exist, use the last matching return.
 - Treat mismatched `auxiliaryTaskId` returns as evidence only; never adopt them.
 - If no schema return exists, accept free-form content only from a clear final answer, such as the last `assistant final` block or the last timestamped `assistant` entry in trusted `sessions history`.
@@ -185,6 +189,7 @@ Use these rules when interpreting `oma run --execute` results:
 Hard execution failures override result trust:
 
 - Permission/tool failures and non-zero prompt execution return `status=failed` and `verdict=reject`.
+- Generic `[tool] ... (failed)` events are treated as execution failures even if the assistant later emits optimistic schema JSON.
 - Do not expose extracted free-form findings as trusted Host-facing findings on hard failures.
 - Keep captured content inspectable through `oma result show <task-id>` when artifact persistence succeeds.
 - If artifact persistence fails after capture, return the captured content to the Host Agent but downgrade away from `provisional_accept`.

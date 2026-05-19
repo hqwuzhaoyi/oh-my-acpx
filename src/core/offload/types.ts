@@ -117,6 +117,7 @@ export interface AuxiliaryTaskReturn {
   verdict: "provisional_accept" | "revise" | "reject";
   hostPlanComplete: false;
   auxiliaryTaskId: string;
+  runId: string;
   summary: string;
   scope: {
     readFiles: string[];

@@ -1,0 +1,289 @@
+:root {
+  color: #1b1c18;
+  background: #f6f1e8;
+  font-family: Avenir Next, Avenir, Montserrat, Trebuchet MS, sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background:
+    linear-gradient(90deg, rgba(27, 28, 24, 0.05) 1px, transparent 1px),
+    linear-gradient(0deg, rgba(27, 28, 24, 0.05) 1px, transparent 1px),
+    #f6f1e8;
+  background-size: 42px 42px;
+}
+
+button,
+a {
+  font: inherit;
+}
+
+.shell {
+  width: min(1180px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 48px 0;
+}
+
+.hero {
+  min-height: 360px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  align-items: end;
+  gap: 28px;
+  padding: 42px;
+  border: 2px solid #1b1c18;
+  background: #fffaf0;
+  box-shadow: 10px 10px 0 #1b1c18;
+}
+
+.eyebrow,
+.statusTopline,
+.sectionTitle,
+.contractLine {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.eyebrow {
+  width: fit-content;
+  margin: 0 0 24px;
+  padding: 8px 12px;
+  border: 1px solid #1b1c18;
+  background: #d7f2ec;
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+h1,
+h2,
+p {
+  margin-top: 0;
+}
+
+h1 {
+  max-width: 760px;
+  margin-bottom: 20px;
+  font-family: Georgia, Iowan Old Style, serif;
+  font-size: clamp(4rem, 12vw, 9.5rem);
+  line-height: 0.82;
+  letter-spacing: 0;
+}
+
+.lede {
+  max-width: 640px;
+  margin-bottom: 0;
+  font-size: 1.2rem;
+  line-height: 1.55;
+  color: #4d4c43;
+}
+
+.statusPanel {
+  border: 2px solid #1b1c18;
+  background: #f05d23;
+  color: #fffaf0;
+  padding: 22px;
+  min-height: 190px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.statusPanel strong {
+  font-size: 1.6rem;
+  line-height: 1.1;
+}
+
+.statusPanel p {
+  margin-bottom: 0;
+}
+
+.board {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+  margin: 46px 0 22px;
+}
+
+.agentCard,
+.workflow,
+.artifact {
+  border: 2px solid #1b1c18;
+  background: #fffaf0;
+}
+
+.agentCard {
+  min-height: 310px;
+  padding: 22px;
+  display: flex;
+  flex-direction: column;
+  transition: transform 180ms ease, box-shadow 180ms ease;
+}
+
+.agentCard:hover {
+  transform: translate(-4px, -4px);
+  box-shadow: 8px 8px 0 var(--accent);
+}
+
+.cardHeader,
+.cardFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.agentMark {
+  display: inline-grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  background: var(--accent);
+  color: #fffaf0;
+  border: 2px solid #1b1c18;
+}
+
+.rolePill {
+  padding: 7px 10px;
+  border: 1px solid #1b1c18;
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.agentCard h2 {
+  margin: 42px 0 14px;
+  font-family: Georgia, Iowan Old Style, serif;
+  font-size: 2.6rem;
+  letter-spacing: 0;
+}
+
+.agentCard p {
+  color: #56534a;
+  line-height: 1.5;
+}
+
+.cardFooter {
+  margin-top: auto;
+  padding-top: 18px;
+  border-top: 1px solid rgba(27, 28, 24, 0.22);
+  align-items: flex-end;
+}
+
+.cardFooter span {
+  color: #6c685f;
+  font-size: 0.88rem;
+}
+
+.cardFooter strong {
+  max-width: 160px;
+  text-align: right;
+}
+
+.lowerGrid {
+  display: grid;
+  grid-template-columns: 1.2fr 0.8fr;
+  gap: 18px;
+}
+
+.workflow,
+.artifact {
+  padding: 24px;
+}
+
+.sectionTitle {
+  margin-bottom: 18px;
+}
+
+.sectionTitle h2 {
+  margin: 0;
+  font-size: 1rem;
+  text-transform: uppercase;
+}
+
+ol {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+li {
+  min-height: 100px;
+  padding: 14px;
+  background: #d7f2ec;
+  border: 1px solid #1b1c18;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+li span {
+  font-weight: 900;
+  color: #0f9b8e;
+}
+
+li strong {
+  text-transform: capitalize;
+}
+
+.artifact {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+}
+
+.contractLine {
+  min-height: 48px;
+  padding: 12px;
+  border: 1px solid #1b1c18;
+  background: #f9d88a;
+  font-weight: 800;
+}
+
+@media (max-width: 860px) {
+  .shell {
+    width: min(100% - 24px, 680px);
+    padding: 24px 0;
+  }
+
+  .hero,
+  .board,
+  .lowerGrid,
+  ol {
+    grid-template-columns: 1fr;
+  }
+
+  .hero {
+    min-height: auto;
+    padding: 24px;
+    box-shadow: 6px 6px 0 #1b1c18;
+  }
+
+  h1 {
+    font-size: clamp(3.7rem, 22vw, 6.5rem);
+  }
+
+  .statusPanel {
+    min-height: 160px;
+  }
+
+  .board {
+    margin-top: 34px;
+  }
+
+  .agentCard {
+    min-height: 260px;
+  }
+}

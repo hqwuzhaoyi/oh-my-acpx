@@ -3,6 +3,7 @@ import type { AuxiliaryTask, AuxiliaryTaskReturn, OffloadPlan } from "./types";
 export function buildAuxiliaryTaskReturn(
   plan: Pick<OffloadPlan, "objective">,
   task: AuxiliaryTask,
+  runId: string,
 ): AuxiliaryTaskReturn {
   return {
     kind: "Auxiliary Task Return",
@@ -10,6 +11,7 @@ export function buildAuxiliaryTaskReturn(
     verdict: "provisional_accept",
     hostPlanComplete: false,
     auxiliaryTaskId: task.id,
+    runId,
     summary: "Auxiliary Task completed through fake/local Execute Mode.",
     scope: {
       readFiles: task.readFiles ?? [],

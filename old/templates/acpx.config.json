@@ -1,0 +1,30 @@
+{
+  "$schema": "https://raw.githubusercontent.com/openclaw/acpx/main/config.schema.json",
+  "defaultAgent": "codex",
+  "defaultPermissions": "approve-all",
+  "nonInteractivePermissions": "deny",
+  "authPolicy": "skip",
+  "ttl": 300,
+  "categories": {
+    "standard": {
+      "agent": "codex",
+      "runtime": "acp",
+      "description": "Regular development and core execution work"
+    },
+    "explore": {
+      "agent": "codex",
+      "runtime": "subagent",
+      "description": "Read-only research and code exploration"
+    },
+    "quick": {
+      "agent": "trae",
+      "runtime": "acp",
+      "description": "Small fast-path changes"
+    }
+  },
+  "relay_fallback": {
+    "enabled": true,
+    "timeout_sec": 75,
+    "fallback_chain": ["acp", "direct_acpx", "subagent"]
+  }
+}

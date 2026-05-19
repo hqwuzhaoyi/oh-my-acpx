@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, test } from "node:test";
@@ -205,6 +205,18 @@ function bodyAsRecord(body: unknown): Record<string, any> {
   return body as Record<string, any>;
 }
 
+let lastCapturedRunId: string | undefined;
+
+function withRunId<T extends Record<string, any>>(value: T, args: string[]): T & { runId: string } {
+  const prompt = String(args.at(-1));
+  const runId = prompt.match(/OMA runId: ([^\n]+)/)?.[1]
+    ?? args.join(" ").match(/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/)?.[0]
+    ?? lastCapturedRunId;
+  assert.ok(runId);
+  lastCapturedRunId = runId;
+  return { ...value, runId };
+}
+
 function skillsPath(): string {
   return resolve(dirname(require.resolve("../../src/cli/index")), "..", "..", "..", "skills");
 }
@@ -258,16 +270,36 @@ describe("offload core", () => {
     }
   });
 
+  test("invalid Auxiliary Task id cannot escape artifact paths", () => {
+    const plan = samplePlan();
+    plan.tasks[0] = {
+      ...plan.tasks[0],
+      id: "../escape",
+    };
+    const { dir, path } = tempPlan(plan);
+    try {
+      const loaded = loadOffloadPlan(path);
+
+      assert.equal(loaded.status, "INVALID_PLAN");
+      if (loaded.status === "INVALID_PLAN") {
+        assert.match(loaded.errors.join("\n"), /safe single path segment/);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("fake Execute Mode returns completed Auxiliary Task Return", () => {
     const plan = samplePlan();
     const task = plan.tasks[0];
 
-    const result = buildAuxiliaryTaskReturn(plan, task);
+    const result = buildAuxiliaryTaskReturn(plan, task, "test-run-id");
 
     assert.equal(result.kind, "Auxiliary Task Return");
     assert.equal(result.status, "completed");
     assert.equal(result.verdict, "provisional_accept");
     assert.equal(result.hostPlanComplete, false);
+    assert.equal(result.runId, "test-run-id");
     assert.match(result.summary, /fake\/local Execute Mode/i);
     assert.ok(result.evidence.length > 0);
     assert.deepEqual(result.scope.modifiedFiles, []);
@@ -280,6 +312,7 @@ describe("offload core", () => {
     assert.equal(schema.kind, "Auxiliary Task Return Schema");
     assert.ok(schema.requiredFields.includes("status"));
     assert.ok(schema.requiredFields.includes("verdict"));
+    assert.ok(schema.requiredFields.includes("runId"));
     assert.match(schema.statusSemantics.completed, /does not mean the Host Plan is complete/i);
   });
 });
@@ -306,11 +339,27 @@ describe("oma CLI", () => {
   test("package exposes oma as the CLI binary", () => {
     const packageJson = JSON.parse(readFileSync(resolve("package.json"), "utf8")) as {
       bin: Record<string, string>;
+      engines: Record<string, string>;
+      scripts: Record<string, string>;
+      files: string[];
     };
 
     assert.deepEqual(packageJson.bin, {
-      oma: "dist/src/cli/index.js",
+      oma: "bin/oma",
     });
+    assert.equal(packageJson.engines.node, ">=20");
+    assert.match(packageJson.scripts.postbuild, /chmod \+x dist\/src\/cli\/index\.js bin\/oma/);
+    assert.equal(packageJson.scripts.prepack, "npm run build");
+    assert.ok(packageJson.files.includes("bin/oma"));
+  });
+
+  test("built oma CLI is executable for package shims", () => {
+    const packageJson = JSON.parse(readFileSync(resolve("package.json"), "utf8")) as {
+      bin: Record<string, string>;
+    };
+
+    const mode = statSync(resolve(packageJson.bin.oma)).mode;
+    assert.notEqual(mode & 0o111, 0);
   });
 
   test("setup creates the default Offload Plan and artifact directory", async () => {
@@ -403,6 +452,74 @@ describe("oma CLI", () => {
     }
   });
 
+  test("run --execute allows local output paths with parent-like filename prefixes", async () => {
+    const plan = samplePlan();
+    plan.tasks[0].localOutputs = [{ path: "..foo/out.txt", content: "inside\n" }];
+    plan.tasks[0].modifiedFiles = ["..foo/out.txt"];
+    const { dir, path } = tempPlan(plan);
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(dir);
+      const result = await runCli(["run", path, "--execute"]);
+      const body = bodyAsRecord(result.body);
+
+      assert.equal(result.exitCode, 0);
+      assert.equal(body.status, "completed");
+      assert.equal(readFileSync(join(dir, "..foo/out.txt"), "utf8"), "inside\n");
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("unsafe local output paths make the Offload Plan invalid", async () => {
+    const plan = samplePlan();
+    plan.tasks[0].localOutputs = [{ path: "../outside.txt", content: "nope\n" }];
+    const { dir, path } = tempPlan(plan);
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(dir);
+      const result = await runCli(["run", path, "--execute"]);
+      const body = bodyAsRecord(result.body);
+
+      assert.equal(result.exitCode, 1);
+      assert.equal(body.status, "INVALID_PLAN");
+      assert.match(body.errors.join("\n"), /inside the workspace/);
+      assert.equal(existsSync(join(dir, "../outside.txt")), false);
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("unsafe acpx local output paths fail before ACPX execution", async () => {
+    const plan = samplePlanWithAcpxRoute();
+    plan.tasks[0].localOutputs = [{ path: "/tmp/outside.txt", content: "nope\n" }];
+    const { dir, path } = tempPlan(plan);
+    const previousCwd = process.cwd();
+    const calls: Array<{ command: string; args: string[] }> = [];
+    try {
+      process.chdir(dir);
+      mkdirSync(join(dir, ".oma/config"), { recursive: true });
+      writeApprovedAgentsConfig(dir);
+      const result = await runCli(["run", path, "--execute"], {
+        executeCommand: async (command, args) => {
+          calls.push({ command, args });
+          return { exitCode: 0, stdout: "should not execute", stderr: "" };
+        },
+      });
+      const body = bodyAsRecord(result.body);
+
+      assert.equal(result.exitCode, 1);
+      assert.equal(body.status, "INVALID_PLAN");
+      assert.match(body.errors.join("\n"), /inside the workspace/);
+      assert.deepEqual(calls, []);
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("run --execute marks completed tasks so split Offload Plans advance", async () => {
     const { dir, path } = tempPlan(samplePlanWithTwoLocalOutputTasks());
     const previousCwd = process.cwd();
@@ -451,7 +568,7 @@ describe("oma CLI", () => {
       assert.equal(result.exitCode, 2);
       assert.equal(body.status, "NO_AGENT_ONBOARDING");
       assert.match(body.summary, /\.oma\/config\/agents\.json/);
-      assert.match(body.summary, /global OMA config/);
+      assert.match(body.summary, /shared global OMA config/);
       assert.deepEqual(calls, []);
     } finally {
       process.chdir(previousCwd);
@@ -531,6 +648,8 @@ describe("oma CLI", () => {
       assert.doesNotMatch(JSON.stringify(body), /fake\/local/);
       assert.equal(calls.length, 4);
       assert.equal(calls[0].command, "acpx");
+      const sessionName = String(calls[0].args.at(-1));
+      assert.match(sessionName, /^oma-acpx-demo-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/);
       assert.deepEqual(calls[0].args, [
         "--cwd",
         process.cwd(),
@@ -538,7 +657,7 @@ describe("oma CLI", () => {
         "sessions",
         "ensure",
         "--name",
-        "oma-acpx-demo",
+        sessionName,
       ]);
       assert.deepEqual(calls[1].args.slice(0, 8), [
         "--cwd",
@@ -548,19 +667,19 @@ describe("oma CLI", () => {
         "180",
         "codex",
         "-s",
-        "oma-acpx-demo",
+        sessionName,
       ]);
       assert.match(calls[1].args[8], /Create a small demo file\./);
       assert.match(calls[1].args[8], /Auxiliary Task Return/);
       assert.match(calls[1].args[8], /auxiliaryTaskId/);
-      assert.deepEqual(calls[2].args, ["--cwd", process.cwd(), "codex", "sessions", "show", "oma-acpx-demo"]);
+      assert.deepEqual(calls[2].args, ["--cwd", process.cwd(), "codex", "sessions", "show", sessionName]);
       assert.deepEqual(calls[3].args, [
         "--cwd",
         process.cwd(),
         "codex",
         "sessions",
         "history",
-        "oma-acpx-demo",
+        sessionName,
         "--limit",
         "20",
       ]);
@@ -612,7 +731,7 @@ describe("oma CLI", () => {
             return { exitCode: 0, stdout: "session metadata", stderr: "" };
           }
           if (args.includes("history")) {
-            return { exitCode: 0, stdout: `assistant final\n\`\`\`json\n${JSON.stringify(schemaReturn, null, 2)}\n\`\`\``, stderr: "" };
+            return { exitCode: 0, stdout: `assistant final\n\`\`\`json\n${JSON.stringify(withRunId(schemaReturn, args), null, 2)}\n\`\`\``, stderr: "" };
           }
           return { exitCode: 0, stdout: "acpx completed", stderr: "" };
         },
@@ -626,6 +745,122 @@ describe("oma CLI", () => {
       assert.equal(body.summary, "Schema-confirmed review completed.");
       assert.deepEqual(body.findings, ["The return capture path should trust schema-valid session history."]);
       assert.deepEqual(body.scope.readFiles, ["docs/design.md"]);
+      assert.match(JSON.stringify(body.evidence), /ACPX acpx .*<prompt redacted>/);
+      assert.match(JSON.stringify(body.evidence), /ACPX sessionName:/);
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("run --execute ignores stale schema returns before the current run marker", async () => {
+    const { dir, path } = tempPlan(samplePlanWithAcpxRoute());
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(dir);
+      mkdirSync(join(dir, ".oma/config"), { recursive: true });
+      writeApprovedAgentsConfig(dir);
+
+      const staleReturn = {
+        kind: "Auxiliary Task Return",
+        status: "completed",
+        verdict: "provisional_accept",
+        hostPlanComplete: false,
+        auxiliaryTaskId: "acpx-demo",
+        summary: "Stale schema-confirmed result.",
+        scope: { readFiles: [], modifiedFiles: [], artifactRefs: [] },
+        evidence: [{ kind: "note", summary: "Old run." }],
+        blockers: [],
+        findings: ["stale finding"],
+        followups: [],
+        coordinationAdvice: { recommendedAction: "accept", reason: "Old run accepted." },
+      };
+      const currentReturn = {
+        ...staleReturn,
+        summary: "Current schema-confirmed result.",
+        findings: ["current finding"],
+        coordinationAdvice: { recommendedAction: "accept", reason: "Current run accepted." },
+      };
+      let currentRunId = "";
+
+      const result = await runCli(["run", path, "--execute"], {
+        executeCommand: async (_command, args) => {
+          if (args.includes("-s")) {
+            const prompt = String(args.at(-1));
+            currentRunId = prompt.match(/OMA runId: ([^\n]+)/)?.[1] ?? "";
+            return { exitCode: 0, stdout: `\`\`\`json\n${JSON.stringify(withRunId(currentReturn, args))}\n\`\`\``, stderr: "" };
+          }
+          if (args.includes("show")) {
+            return { exitCode: 0, stdout: "session metadata", stderr: "" };
+          }
+          if (args.includes("history")) {
+            return {
+              exitCode: 0,
+              stdout: [
+                "assistant final",
+                "```json",
+                JSON.stringify(staleReturn),
+                "```",
+                `2026-05-14T00:00:00.000Z user OMA runId: ${currentRunId}`,
+                "2026-05-14T00:00:01.000Z assistant I did not emit schema in history.",
+              ].join("\n"),
+              stderr: "",
+            };
+          }
+          return { exitCode: 0, stdout: "", stderr: "" };
+        },
+      });
+      const body = bodyAsRecord(result.body);
+
+      assert.equal(result.exitCode, 0);
+      assert.equal(body.summary, "Current schema-confirmed result.");
+      assert.deepEqual(body.findings, ["current finding"]);
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("run --execute rejects schema returns with a mismatched runId", async () => {
+    const { dir, path } = tempPlan(samplePlanWithAcpxRoute());
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(dir);
+      mkdirSync(join(dir, ".oma/config"), { recursive: true });
+      writeApprovedAgentsConfig(dir);
+      const schemaReturn = {
+        kind: "Auxiliary Task Return",
+        runId: "not-this-run",
+        status: "completed",
+        verdict: "provisional_accept",
+        hostPlanComplete: false,
+        auxiliaryTaskId: "acpx-demo",
+        summary: "Wrong run.",
+        scope: { readFiles: [], modifiedFiles: [], artifactRefs: [] },
+        evidence: [],
+        blockers: [],
+        findings: ["wrong run"],
+        followups: [],
+        coordinationAdvice: { recommendedAction: "accept", reason: "Wrong run." },
+      };
+
+      const result = await runCli(["run", path, "--execute"], {
+        executeCommand: async (_command, args) => {
+          if (args.includes("show")) {
+            return { exitCode: 0, stdout: "session metadata", stderr: "" };
+          }
+          if (args.includes("history")) {
+            return { exitCode: 0, stdout: JSON.stringify(schemaReturn), stderr: "" };
+          }
+          return { exitCode: 0, stdout: "acpx completed", stderr: "" };
+        },
+      });
+      const body = bodyAsRecord(result.body);
+
+      assert.equal(result.exitCode, 0);
+      assert.equal(body.status, "blocked");
+      assert.equal(body.verdict, "revise");
+      assert.match(body.blockers.join("\n"), /No usable auxiliary result content/);
     } finally {
       process.chdir(previousCwd);
       rmSync(dir, { recursive: true, force: true });
@@ -667,6 +902,8 @@ describe("oma CLI", () => {
         "It should return revise because no schema-valid return was emitted.",
       ]);
       assert.equal(body.coordinationAdvice.recommendedAction, "retry");
+      const updatedPlan = JSON.parse(readFileSync(path, "utf8")) as OffloadPlan;
+      assert.equal(updatedPlan.tasks[0].status, "pending");
     } finally {
       process.chdir(previousCwd);
       rmSync(dir, { recursive: true, force: true });
@@ -952,7 +1189,7 @@ describe("oma CLI", () => {
           if (args.includes("history")) {
             return { exitCode: 0, stdout: "", stderr: "" };
           }
-          return { exitCode: 0, stdout: JSON.stringify(schemaReturn), stderr: "" };
+          return { exitCode: 0, stdout: JSON.stringify(withRunId(schemaReturn, args)), stderr: "" };
         },
       });
       const body = bodyAsRecord(result.body);
@@ -998,6 +1235,36 @@ describe("oma CLI", () => {
     }
   });
 
+  test("run --execute blocks unmarked free-form stdout fallback", async () => {
+    const { dir, path } = tempPlan(samplePlanWithAcpxRoute());
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(dir);
+      mkdirSync(join(dir, ".oma/config"), { recursive: true });
+      writeApprovedAgentsConfig(dir);
+
+      const result = await runCli(["run", path, "--execute"], {
+        executeCommand: async (_command, args) => {
+          if (args.includes("show")) {
+            return { exitCode: 0, stdout: "session metadata", stderr: "" };
+          }
+          if (args.includes("history")) {
+            return { exitCode: 0, stdout: "", stderr: "" };
+          }
+          return { exitCode: 0, stdout: "plain adapter log line without final marker", stderr: "" };
+        },
+      });
+      const body = bodyAsRecord(result.body);
+
+      assert.equal(result.exitCode, 0);
+      assert.equal(body.status, "blocked");
+      assert.deepEqual(body.findings, []);
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("run --execute adopts the last matching schema-confirmed return", async () => {
     const { dir, path } = tempPlan(samplePlanWithAcpxRoute());
     const previousCwd = process.cwd();
@@ -1032,7 +1299,7 @@ describe("oma CLI", () => {
             return { exitCode: 0, stdout: "session metadata", stderr: "" };
           }
           if (args.includes("history")) {
-            return { exitCode: 0, stdout: `${JSON.stringify(firstReturn)}\n${JSON.stringify(lastReturn)}`, stderr: "" };
+            return { exitCode: 0, stdout: `${JSON.stringify(withRunId(firstReturn, args))}\n${JSON.stringify(withRunId(lastReturn, args))}`, stderr: "" };
           }
           return { exitCode: 0, stdout: "", stderr: "" };
         },
@@ -1092,7 +1359,7 @@ describe("oma CLI", () => {
           if (args.includes("history")) {
             return {
               exitCode: 0,
-              stdout: `${JSON.stringify(staleSchemaReturn)}\n${JSON.stringify(matchingSchemaReturn)}`,
+              stdout: `${JSON.stringify(staleSchemaReturn)}\n${JSON.stringify(withRunId(matchingSchemaReturn, args))}`,
               stderr: "",
             };
           }
@@ -1145,6 +1412,102 @@ describe("oma CLI", () => {
     }
   });
 
+  test("run --execute rejects generic failed tool calls even with schema output", async () => {
+    const { dir, path } = tempPlan(samplePlanWithAcpxRoute());
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(dir);
+      mkdirSync(join(dir, ".oma/config"), { recursive: true });
+      writeApprovedAgentsConfig(dir);
+      const schemaReturn = {
+        kind: "Auxiliary Task Return",
+        status: "completed",
+        verdict: "provisional_accept",
+        hostPlanComplete: false,
+        auxiliaryTaskId: "acpx-demo",
+        summary: "This optimistic return must not be trusted.",
+        scope: { readFiles: [], modifiedFiles: [], artifactRefs: [] },
+        evidence: [],
+        blockers: [],
+        findings: ["Should not be trusted."],
+        followups: [],
+        coordinationAdvice: { recommendedAction: "accept", reason: "Should not be accepted." },
+      };
+
+      const result = await runCli(["run", path, "--execute"], {
+        executeCommand: async (_command, args) => {
+          if (args.includes("show")) {
+            return { exitCode: 0, stdout: "session metadata", stderr: "" };
+          }
+          if (args.includes("history")) {
+            return { exitCode: 0, stdout: JSON.stringify(withRunId(schemaReturn, args)), stderr: "" };
+          }
+          return { exitCode: 0, stdout: `[tool] Read docs.md (failed)\n${JSON.stringify(schemaReturn)}`, stderr: "" };
+        },
+      });
+      const body = bodyAsRecord(result.body);
+
+      assert.equal(result.exitCode, 0);
+      assert.equal(body.status, "failed");
+      assert.equal(body.verdict, "reject");
+      assert.match(body.blockers.join("\n"), /failed tool call/);
+      assert.deepEqual(body.findings, []);
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("run --execute does not treat audited source text as a permission failure", async () => {
+    const { dir, path } = tempPlan(samplePlanWithAcpxRoute());
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(dir);
+      mkdirSync(join(dir, ".oma/config"), { recursive: true });
+      writeApprovedAgentsConfig(dir);
+      const schemaReturn = {
+        kind: "Auxiliary Task Return",
+        status: "completed",
+        verdict: "provisional_accept",
+        hostPlanComplete: false,
+        auxiliaryTaskId: "acpx-demo",
+        summary: "Audited source text safely.",
+        scope: { readFiles: [], modifiedFiles: [], artifactRefs: [] },
+        evidence: [],
+        blockers: [],
+        findings: ["The literal permission string appeared inside source code."],
+        followups: [],
+        coordinationAdvice: { recommendedAction: "accept", reason: "The run itself did not fail." },
+      };
+
+      const result = await runCli(["run", path, "--execute"], {
+        executeCommand: async (_command, args) => {
+          if (args.includes("show")) {
+            return { exitCode: 0, stdout: "session metadata", stderr: "" };
+          }
+          if (args.includes("history")) {
+            return { exitCode: 0, stdout: JSON.stringify(withRunId(schemaReturn, args)), stderr: "" };
+          }
+          return {
+            exitCode: 0,
+            stdout:
+              "function classify() { return 'Permission confirmation required but no interactive handler is available'; }\n",
+            stderr: "",
+          };
+        },
+      });
+      const body = bodyAsRecord(result.body);
+
+      assert.equal(result.exitCode, 0);
+      assert.equal(body.status, "completed");
+      assert.equal(body.verdict, "provisional_accept");
+      assert.equal(body.summary, "Audited source text safely.");
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("run --execute lets hard execution failure override schema-confirmed output", async () => {
     const { dir, path } = tempPlan(samplePlanWithAcpxRoute());
     const previousCwd = process.cwd();
@@ -1173,11 +1536,11 @@ describe("oma CLI", () => {
             return { exitCode: 0, stdout: "session metadata", stderr: "" };
           }
           if (args.includes("history")) {
-            return { exitCode: 0, stdout: JSON.stringify(schemaReturn), stderr: "" };
+            return { exitCode: 0, stdout: JSON.stringify(withRunId(schemaReturn, args)), stderr: "" };
           }
           return {
             exitCode: 0,
-            stdout: `Permission confirmation required but no interactive handler is available.\n${JSON.stringify(schemaReturn)}`,
+            stdout: `[tool] Write (failed)\n  output:\n    Permission confirmation required but no interactive handler is available.\n${JSON.stringify(schemaReturn)}`,
             stderr: "",
           };
         },
@@ -1214,7 +1577,7 @@ describe("oma CLI", () => {
           }
           return {
             exitCode: 0,
-            stdout: "Permission confirmation required but no interactive handler is available.",
+            stdout: "[tool] Write (failed)\n  output:\n    Permission confirmation required but no interactive handler is available.",
             stderr: "",
           };
         },
@@ -1265,7 +1628,7 @@ describe("oma CLI", () => {
             return { exitCode: 0, stdout: "session metadata", stderr: "" };
           }
           if (args.includes("history")) {
-            return { exitCode: 0, stdout: JSON.stringify(schemaReturn), stderr: "" };
+            return { exitCode: 0, stdout: JSON.stringify(withRunId(schemaReturn, args)), stderr: "" };
           }
           return { exitCode: 0, stdout: "acpx completed", stderr: "" };
         },
@@ -1349,7 +1712,7 @@ describe("oma CLI", () => {
           }
           return {
             exitCode: 0,
-            stdout: "Permission confirmation required but no interactive handler is available.",
+            stdout: "[tool] Write (failed)\n  output:\n    Permission confirmation required but no interactive handler is available.",
             stderr: "",
           };
         },
@@ -1544,6 +1907,7 @@ describe("oma CLI", () => {
     assert.equal(result.exitCode, 0);
     assert.equal(body.kind, "Auxiliary Task Return Schema");
     assert.ok(body.requiredFields.includes("evidence"));
+    assert.ok(body.requiredFields.includes("runId"));
   });
 
   test("help command lists acpx onboarding command", async () => {
@@ -1665,10 +2029,81 @@ describe("oma CLI", () => {
       assert.deepEqual(body.availableRoles, ["quick", "deep", "visual"]);
       assert.deepEqual(body.availablePermissions, ["read", "edit"]);
       assert.deepEqual(body.availableScopes, ["project", "global"]);
-      assert.equal(body.recommendedApprovalCommand, "oma acpx approve --agent codex --role deep --permissions edit");
+      assert.equal(body.recommendedApprovalCommand, "oma acpx approve --agent codex --role deep --permissions edit --scope project");
       assert.match(String(body.summary), /declared ACPX adapters/i);
       assert.match(String(body.summary), /does not prove the user can run them/i);
       assert.equal(existsSync(join(process.env.OMA_HOME, "config/agents.json")), false);
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("acpx init recommends a discovered non-codex adapter when codex is absent", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "oma-acpx-init-no-codex-"));
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(dir);
+      const result = await runCli(["acpx", "init"], {
+        executeCommand: async () => ({
+          exitCode: 0,
+          stdout: "Commands:\n  claude [options] [prompt...]                Use claude agent\n",
+          stderr: "",
+        }),
+      });
+      const body = bodyAsRecord(result.body);
+
+      assert.equal(result.exitCode, 0);
+      assert.deepEqual(body.declaredAdapters, ["claude"]);
+      assert.equal(body.recommendedApprovalCommand, "oma acpx approve --agent claude --role deep --permissions edit --scope project");
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("acpx init parses declared adapters from stderr help output", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "oma-acpx-init-stderr-"));
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(dir);
+      const result = await runCli(["acpx", "init"], {
+        executeCommand: async () => ({
+          exitCode: 0,
+          stdout: "",
+          stderr: "Commands:\n  gemini [options] [prompt...]                Use gemini agent\n",
+        }),
+      });
+      const body = bodyAsRecord(result.body);
+
+      assert.equal(result.exitCode, 0);
+      assert.deepEqual(body.declaredAdapters, ["gemini"]);
+      assert.equal(body.recommendedApprovalCommand, "oma acpx approve --agent gemini --role deep --permissions edit --scope project");
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("acpx init reports structured discovery failure when acpx help fails", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "oma-acpx-init-failed-"));
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(dir);
+      const result = await runCli(["acpx", "init"], {
+        executeCommand: async () => ({
+          exitCode: 127,
+          stdout: "",
+          stderr: "acpx: command not found",
+        }),
+      });
+      const body = bodyAsRecord(result.body);
+
+      assert.equal(result.exitCode, 1);
+      assert.equal(body.status, "AGENT_ONBOARDING_DISCOVERY_FAILED");
+      assert.deepEqual(body.declaredAdapters, []);
+      assert.match(String(body.summary), /could not complete ACPX adapter discovery/i);
+      assert.match(String(body.error), /command not found/);
     } finally {
       process.chdir(previousCwd);
       rmSync(dir, { recursive: true, force: true });
@@ -1696,6 +2131,26 @@ describe("oma CLI", () => {
       assert.equal(body.status, "APPROVED_AGENTS_LOADED");
       assert.deepEqual(body.approvedAgents, ["codex"]);
       assert.deepEqual(calls, []);
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("acpx approve reports malformed existing config instead of throwing", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "oma-acpx-approve-malformed-"));
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(dir);
+      mkdirSync(join(dir, ".oma/config"), { recursive: true });
+      writeFileSync(join(dir, ".oma/config/agents.json"), "{bad");
+
+      const result = await runCli(["acpx", "approve", "--agent", "codex", "--role", "deep"]);
+      const body = bodyAsRecord(result.body);
+
+      assert.equal(result.exitCode, 1);
+      assert.equal(body.status, "INVALID_APPROVED_AGENTS");
+      assert.match(body.errors.join("\n"), /JSON/);
     } finally {
       process.chdir(previousCwd);
       rmSync(dir, { recursive: true, force: true });
@@ -1734,13 +2189,11 @@ describe("oma CLI", () => {
     }
   });
 
-  test("acpx approve appends global Approved Agents by default", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "oma-acpx-approve-global-"));
+  test("acpx approve writes project Approved Agents by default", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "oma-acpx-approve-project-default-"));
     const previousCwd = process.cwd();
     try {
       process.chdir(dir);
-      assert.ok(process.env.OMA_HOME);
-      writeGlobalApprovedAgentsConfig(process.env.OMA_HOME);
 
       const result = await runCli([
         "acpx",
@@ -1752,10 +2205,11 @@ describe("oma CLI", () => {
         "--permissions",
         "edit",
       ]);
-      const config = JSON.parse(readFileSync(join(process.env.OMA_HOME, "config/agents.json"), "utf8"));
+      const config = JSON.parse(readFileSync(join(dir, ".oma/config/agents.json"), "utf8"));
 
       assert.equal(result.exitCode, 0);
-      assert.deepEqual(Object.keys(config.approvedAgents).sort(), ["claude", "codex"]);
+      assert.equal(bodyAsRecord(result.body).scope, "project");
+      assert.deepEqual(Object.keys(config.approvedAgents), ["claude"]);
       assert.deepEqual(config.approvedAgents.claude, {
         approved: true,
         role: "deep",
@@ -1771,8 +2225,9 @@ describe("oma CLI", () => {
     const skill = readFileSync(resolve("skills/oma/SKILL.md"), "utf8");
 
     assert.match(skill, /## Onboarding Gate/);
-    assert.match(skill, /Before creating, modifying, or executing any Offload Plan/i);
+    assert.match(skill, /Before executing an ACPX-backed Offload Plan/i);
     assert.match(skill, /must use the `oma-acpx-init` skill/i);
+    assert.match(skill, /proposal-only `oma run`/);
     assert.match(skill, /Do not guess `route\.agent`/);
     assert.match(skill, /Approved Agent role/i);
     assert.match(skill, /summarize the current approval state/i);

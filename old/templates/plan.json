@@ -1,0 +1,13 @@
+{
+  "project": "demo-project",
+  "description": "Minimal plan template for oh-my-acpx",
+  "stories": [
+    {
+      "id": "S-001",
+      "title": "Example story",
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}

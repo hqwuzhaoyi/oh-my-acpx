@@ -9,6 +9,7 @@ export function describeAuxiliaryTaskReturnSchema(): AuxiliaryTaskReturnSchema {
       "verdict",
       "hostPlanComplete",
       "auxiliaryTaskId",
+      "runId",
       "summary",
       "scope",
       "evidence",

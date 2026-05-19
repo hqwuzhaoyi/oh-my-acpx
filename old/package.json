@@ -1,0 +1,20 @@
+{
+  "name": "oh-my-acpx",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Lightweight orchestration runtime for OpenClaw ACPX.",
+  "bin": {
+    "oax": "dist/src/cli/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "setup": "npm run build && node dist/src/cli/index.js setup",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test dist/tests/unit/*.js",
+    "run:plan": "npm run build && node dist/src/cli/index.js run .oma/plans/plan.json"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.2"
+  }
+}

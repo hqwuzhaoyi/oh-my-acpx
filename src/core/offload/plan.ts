@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { isAbsolute, normalize, resolve, sep } from "node:path";
 
 import type {
   AuxiliaryTask,
@@ -104,6 +104,8 @@ function validateAuxiliaryTask(value: unknown, index: number): string[] {
   const task = value as Partial<AuxiliaryTask>;
   if (typeof task.id !== "string" || task.id.length === 0) {
     errors.push(`Auxiliary Task ${index} id must be a non-empty string.`);
+  } else if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(task.id)) {
+    errors.push(`Auxiliary Task ${index} id must be a safe single path segment.`);
   }
   if (typeof task.title !== "string" || task.title.length === 0) {
     errors.push(`Auxiliary Task ${index} title must be a non-empty string.`);
@@ -144,6 +146,8 @@ function validateAuxiliaryTask(value: unknown, index: number): string[] {
         }
         if (typeof output.path !== "string" || output.path.length === 0) {
           errors.push(`Auxiliary Task ${index} localOutputs.${outputIndex}.path must be a non-empty string.`);
+        } else if (!isSafeLocalOutputPath(output.path)) {
+          errors.push(`Auxiliary Task ${index} localOutputs.${outputIndex}.path must stay inside the workspace.`);
         }
         if (typeof output.content !== "string") {
           errors.push(`Auxiliary Task ${index} localOutputs.${outputIndex}.content must be a string.`);
@@ -153,6 +157,11 @@ function validateAuxiliaryTask(value: unknown, index: number): string[] {
   }
 
   return errors;
+}
+
+export function isSafeLocalOutputPath(path: string): boolean {
+  const normalized = normalize(path);
+  return !isAbsolute(normalized) && normalized !== ".." && !normalized.startsWith(`..${sep}`);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

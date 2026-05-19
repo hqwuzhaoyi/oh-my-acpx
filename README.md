@@ -18,7 +18,10 @@ npm run build
 node dist/src/cli/index.js setup
 node dist/src/cli/index.js install
 node dist/src/cli/index.js acpx init
+# If codex is configured and usable in this environment:
+node dist/src/cli/index.js acpx approve --agent codex --role deep --permissions edit --scope project
 node dist/src/cli/index.js run .oma/plans/plan.json
+# Inspect and edit .oma/plans/plan.json before real Execute Mode.
 node dist/src/cli/index.js run .oma/plans/plan.json --execute
 node dist/src/cli/index.js result show <task-id>
 node dist/src/cli/index.js schema
@@ -30,7 +33,10 @@ After installing the package binary, the same flow is:
 oma setup
 oma install
 oma acpx init
+# If codex is configured and usable in this environment:
+oma acpx approve --agent codex --role deep --permissions edit --scope project
 oma run .oma/plans/plan.json
+# Inspect and edit .oma/plans/plan.json before real Execute Mode.
 oma run .oma/plans/plan.json --execute
 oma result show <task-id>
 oma schema
@@ -38,11 +44,26 @@ oma schema
 
 `oma run` returns an **Offload Proposal** by default. It does not call ACPX.
 
-`oma run --execute` enters **Execute Mode**. It can use fake/local execution for declared local outputs, or an `acpx` route to delegate the Auxiliary Task through ACPX and return an **Auxiliary Task Return** with command evidence.
+`oma run --execute` enters **Execute Mode**. It writes `.oma/artifacts/`, may write declared `localOutputs`, and marks the task completed only when the auxiliary return is `completed` + `provisional_accept` + `accept`. It can use fake/local execution for declared local outputs, or an `acpx` route to delegate the Auxiliary Task through ACPX and return an **Auxiliary Task Return** with command evidence.
 
-For ACPX routes, run `oma acpx init` and approve an **Approved Agent** before Execute Mode. ACPX routes may set `route.timeoutSeconds`; if omitted, OMA uses 180 seconds. OMA captures schema-valid **Auxiliary Task Returns** first, then clear final assistant answers from trusted session history, and keeps complete captured content available through `oma result show <task-id>`.
+For ACPX routes, run `oma acpx init` and approve an **Approved Agent** before Execute Mode. Prefer `--scope project` for team repositories. `permissions: read` maps to ACPX `--approve-reads`; some agents still need `permissions: edit` for shell-backed read-only audits because their read path uses command tools. ACPX routes may set `route.timeoutSeconds`; if omitted, OMA uses 180 seconds. OMA appends the current run id to `route.sessionName` so each execution gets a fresh persistent ACPX session, captures schema-valid **Auxiliary Task Returns** for that run first, then clear final assistant answers from trusted session history, and keeps complete captured content available through `oma result show <task-id>`.
 
-`oma install` starts the interactive `skills` installer for every skill under `skills/` by running `npx skills@latest add <oma>/skills --full-depth -f`.
+`oma install` starts the interactive `skills` installer for every skill under `skills/` by running `npx skills@latest add <oma>/skills --full-depth -f`. It installs all OMA skills and may overwrite existing same-name skills; single-skill install is not supported by this command.
+
+## Install Options
+
+For source checkouts, use Node 20 or newer, then run `npm install && npm run build`. Either run `node dist/src/cli/index.js ...` directly or use `npm link` / `npm install -g .` to expose `oma`.
+
+For package smoke checks, run:
+
+```bash
+npm pack
+npm install -g ./oma-*.tgz
+oma --version
+oma setup
+```
+
+The package includes a tracked `bin/oma` wrapper and also chmods `dist/src/cli/index.js` during `npm run build` so Volta and npm shims can execute the CLI. The package is currently marked `private`, so registry publishing is intentionally disabled.
 
 ## Offload Plan
 
@@ -64,8 +85,12 @@ An `acpx` route may include `sessionName` for persistent ACPX sessions and `time
 
 Executed work returns one **Auxiliary Task Return** with:
 
+- `kind`
 - `status`
 - `verdict`
+- `hostPlanComplete`
+- `auxiliaryTaskId`
+- `runId`
 - `summary`
 - `scope`
 - `evidence`

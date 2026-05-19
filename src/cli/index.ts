@@ -1,6 +1,7 @@
 #!/usr/bin/env node
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
+import { dirname, join, normalize, resolve } from "node:path";
 import { spawn } from "node:child_process";
 
 import {
@@ -19,6 +20,7 @@ import {
   loadOffloadPlan,
   matchApprovedAgent,
   PROJECT_APPROVED_AGENTS_PATH,
+  isSafeLocalOutputPath,
   type OffloadPlan,
 } from "../core/offload";
 
@@ -219,7 +221,27 @@ async function acpxInitCommand(
   }
 
   const detected = await execute("acpx", ["--help"], process.env);
-  const declaredAdapters = parseAcpxAgents(detected.stdout || detected.stderr);
+  const discoveryOutput = `${detected.stdout}\n${detected.stderr}`;
+  const declaredAdapters = parseAcpxAgents(discoveryOutput);
+  if (detected.exitCode !== 0) {
+    return {
+      exitCode: 1,
+      body: {
+        status: "AGENT_ONBOARDING_DISCOVERY_FAILED",
+        declaredAdapters,
+        availableRoles: ["quick", "deep", "visual"],
+        availablePermissions: ["read", "edit"],
+        availableScopes: ["project", "global"],
+        summary:
+          "OMA could not complete ACPX adapter discovery. Declared adapters are candidates only; fix or verify ACPX before approving agents.",
+        error: detected.stderr || detected.stdout || "acpx --help failed.",
+      },
+    };
+  }
+  const recommendedAgent = declaredAdapters.includes("codex") ? "codex" : declaredAdapters[0];
+  const recommendedApprovalCommand = recommendedAgent
+    ? `oma acpx approve --agent ${recommendedAgent} --role ${recommendedRoleForAgent(recommendedAgent)} --permissions edit --scope project`
+    : undefined;
 
   return {
     exitCode: 0,
@@ -230,7 +252,7 @@ async function acpxInitCommand(
       availablePermissions: ["read", "edit"],
       availableScopes: ["project", "global"],
       recommendedRoles: Object.fromEntries(declaredAdapters.map((agent) => [agent, recommendedRoleForAgent(agent)])),
-      recommendedApprovalCommand: "oma acpx approve --agent codex --role deep --permissions edit",
+      recommendedApprovalCommand,
       summary:
         "Declared ACPX adapters discovered. This does not prove the user can run them; ask which adapters are configured and usable before approving roles, permissions, and scope.",
     },
@@ -242,7 +264,7 @@ function acpxApproveCommand(args: string[]): CliResult {
   const agent = parsed.agent;
   const role = parsed.role ?? (agent ? recommendedRoleForAgent(agent) : undefined);
   const permissions = parsed.permissions ?? "edit";
-  const scope = parsed.scope ?? "global";
+  const scope = parsed.scope ?? "project";
 
   if (!agent || !role || !["quick", "deep", "visual"].includes(role) || !["read", "edit"].includes(permissions) || !["project", "global"].includes(scope)) {
     return {
@@ -257,8 +279,11 @@ function acpxApproveCommand(args: string[]): CliResult {
 
   const configPath = scope === "project" ? resolve(PROJECT_APPROVED_AGENTS_PATH) : defaultApprovedAgentsPath();
   const existingApprovedAgents = loadExistingApprovedAgentsForWrite(configPath);
+  if (!existingApprovedAgents.ok) {
+    return existingApprovedAgents.result;
+  }
   const approvedAgents = {
-    ...existingApprovedAgents,
+    ...existingApprovedAgents.approvedAgents,
     [agent]: {
       approved: true as const,
       role: role as "quick" | "deep" | "visual",
@@ -301,13 +326,24 @@ function parseAcpxAgents(helpOutput: string): string[] {
   return agents;
 }
 
-function loadExistingApprovedAgentsForWrite(configPath: string): ApprovedAgentConfig["approvedAgents"] {
+function loadExistingApprovedAgentsForWrite(
+  configPath: string,
+): { ok: true; approvedAgents: ApprovedAgentConfig["approvedAgents"] } | { ok: false; result: CliResult } {
   if (!existsSync(configPath)) {
-    return {};
+    return { ok: true, approvedAgents: {} };
   }
 
-  const parsed = JSON.parse(readFileSync(configPath, "utf8")) as ApprovedAgentConfig;
-  return parsed.approvedAgents ?? {};
+  const loaded = loadApprovedAgents(configPath);
+  if (loaded.status !== "APPROVED_AGENTS_LOADED") {
+    return {
+      ok: false,
+      result: {
+        exitCode: 1,
+        body: loaded,
+      },
+    };
+  }
+  return { ok: true, approvedAgents: loaded.config.approvedAgents };
 }
 
 function recommendedRoleForAgent(agent: string): "quick" | "deep" | "visual" {
@@ -487,12 +523,17 @@ async function runCommand(
     }
   }
 
+  const runId = randomUUID();
+  const acpxSessionName = inspection.task.route.runtime === "acpx"
+    ? sessionNameForRun(inspection.task.route.sessionName ?? `oma-${inspection.task.id}`, runId)
+    : undefined;
   const acpxResult =
     inspection.task.route.runtime === "acpx" && acpxMatch?.status === "APPROVED_AGENT_MATCH"
       ? await runAcpxTask(
           inspection.task.route.agent,
-          inspection.task.route.sessionName ?? `oma-${inspection.task.id}`,
+          acpxSessionName ?? `oma-${inspection.task.id}`,
           inspection.task.id,
+          runId,
           inspection.task.prompt,
           inspection.task.localOutputs,
           inspection.task.route.timeoutSeconds,
@@ -500,7 +541,7 @@ async function runCommand(
           execute,
         )
       : undefined;
-  const auxiliaryReturn = buildAuxiliaryTaskReturn(loaded.plan, inspection.task);
+  const auxiliaryReturn = buildAuxiliaryTaskReturn(loaded.plan, inspection.task, runId);
   let capturedAnswer: string | undefined;
   if (acpxResult) {
     auxiliaryReturn.summary = "Auxiliary Task completed through ACPX Execute Mode.";
@@ -515,7 +556,7 @@ async function runCommand(
     auxiliaryReturn.followups = [];
     auxiliaryReturn.evidence.push({
       kind: "command",
-      summary: `ACPX ${acpxResult.command.join(" ")} exited ${acpxResult.exitCode}: ${acpxResult.stdout || acpxResult.stderr}`,
+      summary: summarizeAcpxCommand(acpxResult),
     });
     if (acpxResult.sessionName) {
       auxiliaryReturn.evidence.push({
@@ -529,21 +570,23 @@ async function runCommand(
       : undefined;
     const captured = captureSchemaConfirmedAuxiliaryReturn({
       auxiliaryTaskId: inspection.task.id,
+      runId,
       sessionHistory: trustedSessionHistory,
       stdout: acpxResult.stdout,
     });
     const mismatchEvidence = captureMismatchedAuxiliaryReturns({
       auxiliaryTaskId: inspection.task.id,
+      runId,
       sessionHistory: trustedSessionHistory,
       stdout: acpxResult.stdout,
     }).map((mismatch) => ({
       kind: "note" as const,
       summary: `Ignored Auxiliary Task Return for ${mismatch.auxiliaryTaskId}; expected ${inspection.task.id}.`,
     }));
-    auxiliaryReturn.evidence.push(...mismatchEvidence);
     const extracted = captured
       ? undefined
       : captureExtractedAuxiliaryFindings({
+          runId,
           sessionHistory: trustedSessionHistory,
           stdout: acpxResult.stdout,
         });
@@ -564,9 +607,11 @@ async function runCommand(
       };
     } else {
       if (captured) {
+        const transportEvidence = auxiliaryReturn.evidence;
         Object.assign(auxiliaryReturn, captured);
-        auxiliaryReturn.evidence = [...captured.evidence, ...mismatchEvidence];
+        auxiliaryReturn.evidence = [...captured.evidence, ...transportEvidence, ...mismatchEvidence];
       } else {
+        auxiliaryReturn.evidence.push(...mismatchEvidence);
         if (extracted) {
           auxiliaryReturn.findings = extracted.findings;
           auxiliaryReturn.status = "completed";
@@ -593,7 +638,17 @@ async function runCommand(
     }
   }
   if (inspection.task.route.runtime !== "acpx") {
-    writeLocalOutputs(inspection.task.localOutputs);
+    const localOutputResult = writeLocalOutputs(inspection.task.localOutputs);
+    if (!localOutputResult.ok) {
+      auxiliaryReturn.status = "failed";
+      auxiliaryReturn.verdict = "reject";
+      auxiliaryReturn.findings = [];
+      auxiliaryReturn.blockers.push(localOutputResult.error);
+      auxiliaryReturn.coordinationAdvice = {
+        recommendedAction: "fallback_to_host",
+        reason: "OMA could not write declared local outputs.",
+      };
+    }
   }
   const artifactResult = writeArtifact(auxiliaryReturn, acpxResult, { capturedAnswer });
   if (!artifactResult.ok) {
@@ -607,7 +662,7 @@ async function runCommand(
       reason: "OMA captured auxiliary result content but could not persist the result artifact for later inspection.",
     };
   }
-  if (auxiliaryReturn.status === "completed") {
+  if (shouldMarkTaskCompleted(auxiliaryReturn)) {
     markTaskCompleted(planPath, loaded.plan, inspection.task.id);
   }
 
@@ -615,6 +670,17 @@ async function runCommand(
     exitCode: 0,
     body: auxiliaryReturn,
   };
+}
+
+function sessionNameForRun(baseSessionName: string, runId: string): string {
+  return `${baseSessionName}-${runId}`;
+}
+
+function shouldMarkTaskCompleted(auxiliaryReturn: AuxiliaryTaskReturn): boolean {
+  return auxiliaryReturn.status === "completed"
+    && auxiliaryReturn.verdict === "provisional_accept"
+    && auxiliaryReturn.blockers.length === 0
+    && auxiliaryReturn.coordinationAdvice.recommendedAction === "accept";
 }
 
 function markTaskCompleted(planPath: string, plan: OffloadPlan, taskId: string): void {
@@ -630,16 +696,35 @@ function classifyAcpxFailure(result: CommandResult): string | undefined {
   if (result.exitCode !== 0) {
     return result.stderr || result.stdout || "ACPX execution failed.";
   }
-  if (/Permission confirmation required but no interactive handler is available/i.test(combinedOutput)) {
+  if (/^\[tool\].*\(failed\)[\s\S]{0,1200}Permission confirmation required but no interactive handler is available/im.test(combinedOutput)) {
     return "ACPX reported a tool permission failure: Permission confirmation required but no interactive handler is available.";
   }
+  if (/^\[tool\].*\(failed\)/im.test(combinedOutput)) {
+    return "ACPX reported a failed tool call.";
+  }
   return undefined;
+}
+
+function summarizeAcpxCommand(result: CommandResult & { command: string[]; sessionName?: string }): string {
+  const command = result.command.includes("-s")
+    ? `${result.command.slice(0, result.command.indexOf("-s") + 2).join(" ")} <prompt redacted>`
+    : result.command.join(" ");
+  const output = summarizeCommandOutput(result.stdout || result.stderr);
+  return `ACPX ${command} exited ${result.exitCode}${output ? `: ${output}` : ""}`;
+}
+
+function summarizeCommandOutput(output: string): string {
+  const trimmed = output.trim();
+  if (!trimmed) return "";
+  const lines = trimmed.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  return lines.slice(0, 8).join("\n").slice(0, 1200);
 }
 
 async function runAcpxTask(
   agent: string,
   sessionName: string,
   auxiliaryTaskId: string,
+  runId: string,
   prompt: string,
   localOutputs: Array<{ path: string; content: string }> | undefined,
   timeoutSeconds: number | undefined,
@@ -667,7 +752,7 @@ async function runAcpxTask(
     agent,
     "-s",
     sessionName,
-    buildAcpxPrompt(prompt, auxiliaryTaskId, localOutputs),
+    buildAcpxPrompt(prompt, auxiliaryTaskId, runId, localOutputs),
   ];
   const result = await execute("acpx", promptArgs, process.env);
   const sessionShow = await execute("acpx", ["--cwd", process.cwd(), agent, "sessions", "show", sessionName], process.env);
@@ -685,7 +770,12 @@ async function runAcpxTask(
   };
 }
 
-function buildAcpxPrompt(prompt: string, auxiliaryTaskId: string, localOutputs: Array<{ path: string; content: string }> | undefined): string {
+function buildAcpxPrompt(
+  prompt: string,
+  auxiliaryTaskId: string,
+  runId: string,
+  localOutputs: Array<{ path: string; content: string }> | undefined,
+): string {
   const fileInstructions = (localOutputs ?? [])
     .map((output) => `Path: ${output.path}\nContent:\n${output.content}`)
     .join("\n---\n");
@@ -701,9 +791,12 @@ ${fileInstructions}
 
   return `${prompt}${localOutputSection}
 
+OMA runId: ${runId}
+
 At the end, return a schema-valid JSON object for OMA using this Auxiliary Task Return shape. The final JSON must include:
 - "kind": "Auxiliary Task Return"
 - "auxiliaryTaskId": ${JSON.stringify(auxiliaryTaskId)}
+- "runId": ${JSON.stringify(runId)}
 - "status": "completed" | "blocked" | "failed"
 - "verdict": "provisional_accept" | "revise" | "reject"
 - "hostPlanComplete": false
@@ -711,14 +804,19 @@ At the end, return a schema-valid JSON object for OMA using this Auxiliary Task 
 `;
 }
 
-function writeLocalOutputs(outputs: Array<{ path: string; content: string }> | undefined): void {
-  for (const output of outputs ?? []) {
-    const outputPath = normalize(output.path);
-    if (isAbsolute(outputPath) || outputPath.startsWith("..")) {
-      throw new Error(`Refusing to write local output outside the workspace: ${output.path}`);
+function writeLocalOutputs(outputs: Array<{ path: string; content: string }> | undefined): { ok: true } | { ok: false; error: string } {
+  try {
+    for (const output of outputs ?? []) {
+      const outputPath = normalize(output.path);
+      if (!isSafeLocalOutputPath(output.path)) {
+        return { ok: false, error: `Refusing to write local output outside the workspace: ${output.path}` };
+      }
+      mkdirSync(dirname(outputPath), { recursive: true });
+      writeFileSync(outputPath, output.content);
     }
-    mkdirSync(dirname(outputPath), { recursive: true });
-    writeFileSync(outputPath, output.content);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
 }
 

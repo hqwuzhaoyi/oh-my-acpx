@@ -43,10 +43,10 @@ export function loadApprovedAgents(configPath?: string): LoadApprovedAgentsResul
 
   return {
     status: "NO_AGENT_ONBOARDING",
-    configPath: defaultApprovedAgentsPath(),
+    configPath: resolve(PROJECT_APPROVED_AGENTS_PATH),
     checkedPaths: candidates.map((candidate) => candidate.path),
     summary:
-      "Real ACPX execution requires Approved Agents from the global OMA config, or a project override at .oma/config/agents.json. Run oma acpx init first.",
+      "Real ACPX execution requires Approved Agents from project .oma/config/agents.json by default, or an explicit shared global OMA config. Run oma acpx init first.",
     errors: [`Missing Approved Agents config. Checked: ${candidates.map((candidate) => candidate.path).join(", ")}`],
   };
 }

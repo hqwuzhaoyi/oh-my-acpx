@@ -22,18 +22,18 @@ OMA may only recommend or execute through **Approved Agents**.
 The onboarding flow should:
 
 1. Detect ACPX if available.
-2. Inspect ACPX-declared and ACPX-configured agents.
-3. Optionally run smoke checks for candidate agents.
+2. Inspect ACPX-declared agents from the current CLI discovery surface.
+3. Optionally run manual smoke checks for candidate agents before approval.
 4. Explain that declared/configured/verified does not equal approved.
 5. Ask the user which agents OMA may use in the skill, not in the CLI.
 6. Recommend one auxiliary task role for each approved agent.
 7. Write the result through `oma acpx approve --agent <name> --role <role> --permissions <read|edit> --scope <project|global>`.
 
-`oma acpx init` must not prompt. It returns existing approvals or discovered ACPX agents.
+`oma acpx init` must not prompt. It returns existing approvals or discovered ACPX agents. Current CLI discovery is intentionally conservative: it does not prove that a declared adapter is configured, authenticated, or usable.
 
 ## Persisted config
 
-By default, `oma acpx approve` writes global approvals so the user does not need to approve the same ACPX agent in every project. A project may still provide `.oma/config/agents.json` by using `--scope project` when it intentionally needs different approvals.
+By default, `oma acpx approve` writes project approvals to `.oma/config/agents.json`. Use `--scope global` only when the same ACPX approval should intentionally apply across projects.
 
 Example:
 
@@ -63,6 +63,7 @@ Example:
 - If no approved agent matches the requested role, OMA must return `NO_APPROVED_AGENT`.
 - Approved Agent roles are `quick`, `deep`, and `visual`.
 - `permissions: "edit"` maps to ACPX `--approve-all`; `permissions: "read"` maps to ACPX `--approve-reads`.
+- Some agents implement read-only inspection through shell tools; approve those agents with `permissions: "edit"` when `--approve-reads` produces non-interactive permission failures.
 - Fake/local execution may still be used for schema and development tests without approved agents.
 
 ## Non-goals

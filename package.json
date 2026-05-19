@@ -4,16 +4,29 @@
   "private": true,
   "description": "OMA context-saving auxiliary offload sidecar for host agents using ACPX.",
   "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  },
   "bin": {
-    "oma": "dist/src/cli/index.js"
+    "oma": "bin/oma"
   },
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.json",
+    "postbuild": "chmod +x dist/src/cli/index.js bin/oma",
+    "prepack": "npm run build",
     "prepublishOnly": "npm run build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test dist/tests/unit/*.js",
     "setup": "npm run build && node dist/src/cli/index.js setup"
   },
+  "files": [
+    "bin/oma",
+    "dist/src/**/*.js",
+    "docs/adr/*.md",
+    "docs/oma-acpx-init.md",
+    "README.md",
+    "skills/**/*.md"
+  ],
   "devDependencies": {
     "@types/node": "^24.0.0",
     "typescript": "^5.9.2"

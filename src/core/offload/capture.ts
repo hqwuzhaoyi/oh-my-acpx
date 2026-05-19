@@ -2,6 +2,7 @@ import type { AuxiliaryTaskReturn } from "./types";
 
 type CaptureInput = {
   auxiliaryTaskId: string;
+  runId?: string;
   sessionHistory?: string;
   stdout?: string;
 };
@@ -21,12 +22,12 @@ const EVIDENCE_KIND_VALUES = new Set(["note", "artifact", "command", "file"]);
 const RECOMMENDED_ACTION_VALUES = new Set(["accept", "retry", "ask_user", "spawn_followup", "fallback_to_host"]);
 
 export function captureSchemaConfirmedAuxiliaryReturn(input: CaptureInput): AuxiliaryTaskReturn | undefined {
-  const sources = [input.sessionHistory ?? "", input.stdout ?? ""];
+  const sources = captureSources(input);
   for (const source of sources) {
     const matches = extractJsonObjects(source)
       .map(parseJsonObject)
       .filter((value): value is Record<string, unknown> => isRecord(value))
-      .filter((value) => isAuxiliaryTaskReturnForTask(value, input.auxiliaryTaskId));
+      .filter((value) => isAuxiliaryTaskReturnForTask(value, input.auxiliaryTaskId, input.runId));
     const last = matches.at(-1);
     if (last) return last as unknown as AuxiliaryTaskReturn;
   }
@@ -36,7 +37,7 @@ export function captureSchemaConfirmedAuxiliaryReturn(input: CaptureInput): Auxi
 export function captureMismatchedAuxiliaryReturns(input: CaptureInput): MismatchedAuxiliaryReturn[] {
   const seen = new Set<string>();
   const mismatches: MismatchedAuxiliaryReturn[] = [];
-  for (const source of [input.sessionHistory ?? "", input.stdout ?? ""]) {
+  for (const source of captureSources(input)) {
     for (const value of extractJsonObjects(source).map(parseJsonObject)) {
       if (!isRecord(value) || value.kind !== "Auxiliary Task Return") continue;
       const auxiliaryTaskId = value.auxiliaryTaskId;
@@ -50,9 +51,12 @@ export function captureMismatchedAuxiliaryReturns(input: CaptureInput): Mismatch
   return mismatches;
 }
 
-export function captureExtractedAuxiliaryFindings(input: Pick<CaptureInput, "sessionHistory" | "stdout">): ExtractedAuxiliaryFindings | undefined {
-  const capturedAnswer = [input.sessionHistory, input.stdout]
-    .map((source) => extractFreeFormAnswer(source ?? ""))
+export function captureExtractedAuxiliaryFindings(input: Pick<CaptureInput, "runId" | "sessionHistory" | "stdout">): ExtractedAuxiliaryFindings | undefined {
+  const capturedAnswer = [
+    { source: captureSessionHistorySource(input), requireFinalMarker: false },
+    { source: input.stdout ?? "", requireFinalMarker: true },
+  ]
+    .map(({ source, requireFinalMarker }) => extractFreeFormAnswer(source, { requireFinalMarker }))
     .find((answer) => answer.length > 0);
   if (!capturedAnswer) return undefined;
   const findings = capturedAnswer
@@ -64,13 +68,35 @@ export function captureExtractedAuxiliaryFindings(input: Pick<CaptureInput, "ses
   return { capturedAnswer, findings };
 }
 
-function extractFreeFormAnswer(text: string): string {
+function captureSources(input: Pick<CaptureInput, "runId" | "sessionHistory" | "stdout">): string[] {
+  return [
+    captureSessionHistorySource(input),
+    input.stdout ?? "",
+  ];
+}
+
+function captureSessionHistorySource(input: Pick<CaptureInput, "runId" | "sessionHistory">): string {
+  const scopedHistory = scopeSessionHistoryToRun(input.sessionHistory ?? "", input.runId);
+  return scopedHistory ?? input.sessionHistory ?? "";
+}
+
+function scopeSessionHistoryToRun(sessionHistory: string, runId: string | undefined): string | undefined {
+  if (!runId || !sessionHistory) return undefined;
+  const markerIndex = sessionHistory.lastIndexOf(`OMA runId: ${runId}`);
+  if (markerIndex === -1) return undefined;
+  return sessionHistory.slice(markerIndex);
+}
+
+function extractFreeFormAnswer(text: string, options: { requireFinalMarker: boolean }): string {
   const lines = text
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
   const finalMarkerIndex = findLastAssistantFinalIndex(lines);
   const timestampedAssistantIndex = finalMarkerIndex === -1 ? findLastTimestampedAssistantIndex(lines) : -1;
+  if (options.requireFinalMarker && finalMarkerIndex === -1 && timestampedAssistantIndex === -1) {
+    return "";
+  }
   if (finalMarkerIndex === -1 && timestampedAssistantIndex === -1 && lines.some(isTranscriptBoundary)) {
     return "";
   }
@@ -193,10 +219,11 @@ function parseJsonObject(json: string): unknown {
   }
 }
 
-function isAuxiliaryTaskReturnForTask(value: Record<string, unknown>, auxiliaryTaskId: string): boolean {
+function isAuxiliaryTaskReturnForTask(value: Record<string, unknown>, auxiliaryTaskId: string, runId?: string): boolean {
   return value.kind === "Auxiliary Task Return"
     && value.hostPlanComplete === false
     && value.auxiliaryTaskId === auxiliaryTaskId
+    && (runId === undefined || value.runId === runId)
     && typeof value.summary === "string"
     && STATUS_VALUES.has(String(value.status))
     && VERDICT_VALUES.has(String(value.verdict))

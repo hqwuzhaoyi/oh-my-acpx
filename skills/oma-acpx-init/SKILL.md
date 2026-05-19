@@ -54,7 +54,7 @@ Use concise questions. The user should not need to understand internal routing f
 - If there are multiple, ask the user to choose one or more agent names.
 - Recommend one role per selected agent: `quick`, `deep`, or `visual`.
 - Ask once whether selected agents may edit files. Default is edit.
-- Ask whether approval should be project-only or global. Default is global unless the user asks for a project-specific override.
+- Ask whether approval should be project-only or global. Default is project unless the user explicitly wants the same approval across projects.
 
 Example:
 
@@ -65,7 +65,7 @@ Current configuration:
 - Approved Agents: none
 
 Available choices:
-- Declared ACPX adapters: codex, claude, gemini, cursor, qwen, kimi, iflow, droid, pi
+- Declared ACPX adapters: codex, claude, gemini, cursor, qwen, kimi, iflow, droid, pi, qoder
 - Roles: quick, deep, visual
 - Permissions: read, edit
 - Scope: project, global
@@ -144,7 +144,7 @@ oma run .oma/plans/plan.json --execute
 
 ## Persisted Shape
 
-Expected `~/.oma/config/agents.json`:
+Expected `.oma/config/agents.json` for the default project-scoped approval:
 
 ```json
 {
@@ -169,4 +169,4 @@ Handle these results directly:
 
 Fake/local execution may still run without Approved Agents. Real ACPX execution must not.
 
-Project-specific overrides may still live at `.oma/config/agents.json`. Use them only when the project intentionally needs different approvals from the global default.
+Global approvals may still live at `~/.oma/config/agents.json` when the user intentionally wants the same approvals across projects.
