@@ -1,0 +1,17 @@
+{
+  "project": "demo",
+  "stories": [
+    {
+      "id": "S-001",
+      "title": "First",
+      "priority": 1,
+      "passes": false
+    },
+    {
+      "id": "S-002",
+      "title": "Second",
+      "priority": 2,
+      "passes": true
+    }
+  ]
+}

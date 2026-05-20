@@ -1,0 +1,14 @@
+#!/usr/bin/env node
+"use strict";
+
+const { runCli } = require("../dist/src/cli/index.js");
+
+runCli(process.argv.slice(2))
+  .then((result) => {
+    process.stdout.write(`${JSON.stringify(result.body, null, 2)}\n`);
+    process.exitCode = result.exitCode;
+  })
+  .catch((error) => {
+    process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
+    process.exitCode = 1;
+  });

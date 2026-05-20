@@ -1,29 +1,20 @@
-# Dependencies
 node_modules/
-
-# Build
 dist/
 build/
-
-# IDE
-.vscode/
-.idea/
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Logs
-*.log
-npm-debug.log*
-
-# Environment
 .env
-.env.local
-
-# Test results
-test-results/
-
-# Temporary
+.env.*
+*.log
 *.tmp
 *.swp
+*.swo
+*.tsbuildinfo
+coverage/
+test-results/
+.DS_Store
+.oma/artifacts/
+.oma/config/
+.oma/logs/
+.oma/plans/
+.oma/telemetry/
+.omc/
+.omx/

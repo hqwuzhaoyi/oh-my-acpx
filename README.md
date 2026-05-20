@@ -1,273 +1,138 @@
-# Oh My ACPX 🦞
+# OMA
 
-> Multi-agent orchestration skill for OpenClaw ACP runtime.
+OMA is a context-saving auxiliary offload sidecar for a **Host Agent**. The **Host Agent** keeps the main context, owns the **Host Plan**, makes **Main Context Decisions**, and integrates results. OMA only consumes an **Offload Plan** made of bounded **Auxiliary Tasks** when delegating that work can save context.
 
-**Oh My ACPX** 是一个 OpenClaw skill，实现多 agent 智能调度——根据任务类型自动选择最佳运行时和 agent（trae / codex / claude），并内置 ACP relay stall 的降级兜底。
+OMA is not the primary execution runtime, not an ACPX replacement, and not a full team/swarm system.
 
-## 工作原理
+## Naming
 
-```
-你的对话 → OpenClaw 加载 acp-orchestrator skill
-                     ↓
-            agent 按 SKILL.md 中的规则执行：
-            ├── 规划/调研 → sessions_spawn(runtime:"subagent")  ← 完成通告稳定
-            ├── 编码/重构 → sessions_spawn(runtime:"acp")       ← 能力更强
-            └── relay stall → sessions_history() 回捞 → acpx → subagent 降级
-```
+- **OMA** is the project and product name.
+- **`oma`** is the CLI command used to operate OMA.
+- **`oma`** is the package name.
 
-核心逻辑全部内联在 `SKILL.md` 中，agent 读取后自动执行，完全兼容 OpenClaw 官方插件体系，无外部依赖。
-
-## 快速开始
-
-### 前置要求
-
-1. [OpenClaw](https://openclaw.ai) 已安装且 gateway 运行中
-2. ACP 已启用（`openclaw.json` 中 `acp.allowedAgents` 已配置，见下方）
-3. acpx 插件已启用（`plugins.entries.acpx.enabled: true`，`permissionMode: "approve-all"`）
-4. 至少一个 coding agent 可用（claude / codex / trae）
-
-### 安装
-
-**方式 1：symlink 到 skills 目录（推荐）**
+## Quick Start
 
 ```bash
-# 克隆项目
-git clone https://github.com/openclaw/oh-my-acpx.git
-
-# 创建 symlink，OpenClaw 自动发现
-ln -s "$(pwd)/oh-my-acpx" ~/.openclaw/skills/acp-orchestrator
+npm install
+npm run build
+node dist/src/cli/index.js setup
+node dist/src/cli/index.js install
+node dist/src/cli/index.js acpx init
+# If codex is configured and usable in this environment:
+node dist/src/cli/index.js acpx approve --agent codex --role deep --permissions edit --scope project
+node dist/src/cli/index.js run .oma/plans/plan.json
+# Inspect and edit .oma/plans/plan.json before real Execute Mode.
+node dist/src/cli/index.js run .oma/plans/plan.json --execute
+node dist/src/cli/index.js result show <task-id>
+node dist/src/cli/index.js schema
 ```
 
-**方式 2：放入 workspace（自动发现）**
+After installing the package binary, the same flow is:
 
 ```bash
-# 如果项目已在 agent 的 workspace 目录下，SKILL.md 会被自动发现
-# 例如放在 ~/.openclaw/workspace/oh-my-acpx/
+oma setup
+oma install
+oma acpx init
+# If codex is configured and usable in this environment:
+oma acpx approve --agent codex --role deep --permissions edit --scope project
+oma run .oma/plans/plan.json
+# Inspect and edit .oma/plans/plan.json before real Execute Mode.
+oma run .oma/plans/plan.json --execute
+oma result show <task-id>
+oma schema
 ```
 
-**方式 3：手动复制**
+`oma run` returns an **Offload Proposal** by default. It does not call ACPX.
+
+`oma run --execute` enters **Execute Mode**. It writes `.oma/artifacts/`, may write declared `localOutputs`, and marks the task completed only when the auxiliary return is `completed` + `provisional_accept` + `accept`. It can use fake/local execution for declared local outputs, or an `acpx` route to delegate the Auxiliary Task through ACPX and return an **Auxiliary Task Return** with command evidence.
+
+For ACPX routes, run `oma acpx init` and approve an **Approved Agent** before Execute Mode. Prefer `--scope project` for team repositories. `permissions: read` maps to ACPX `--approve-reads`; some agents still need `permissions: edit` for shell-backed read-only audits because their read path uses command tools. ACPX routes may set `route.timeoutSeconds`; if omitted, OMA uses 180 seconds. OMA appends the current run id to `route.sessionName` so each execution gets a fresh persistent ACPX session, captures schema-valid **Auxiliary Task Returns** for that run first, then clear final assistant answers from trusted session history, and keeps complete captured content available through `oma result show <task-id>`.
+
+`oma install` starts the interactive `skills` installer for every skill under `skills/` by running `npx skills@latest add <oma>/skills --full-depth -f`. It installs all OMA skills and may overwrite existing same-name skills; single-skill install is not supported by this command.
+
+## Install Options
+
+For source checkouts, use Node 20 or newer, then run `npm install && npm run build`. Either run `node dist/src/cli/index.js ...` directly or use `npm link` / `npm install -g .` to expose `oma`.
+
+For package smoke checks, run:
 
 ```bash
-# 复制整个项目到 skills 目录
-cp -r oh-my-acpx ~/.openclaw/skills/acp-orchestrator
+npm pack
+npm install -g ./oma-*.tgz
+oma --version
+oma setup
 ```
 
-### 验证安装
+The package includes a tracked `bin/oma` wrapper and also chmods `dist/src/cli/index.js` during `npm run build` so Volta and npm shims can execute the CLI. The package is currently marked `private`, so registry publishing is intentionally disabled.
+
+## Offload Plan
+
+The default example lives at `.oma/plans/plan.json`.
+
+An **Offload Plan** is the OMA-readable slice of work selected by the **Host Agent**. It is not the **Host Plan** and should contain only bounded **Auxiliary Tasks** with enough context to run independently.
+
+Each **Auxiliary Task** declares:
+
+- `contextBudget`
+- selected `route`
+- prompt/payload for the runtime
+- expected return contract
+- read and modified file scope when known
+
+An `acpx` route may include `sessionName` for persistent ACPX sessions and `timeoutSeconds` for long-running bounded work.
+
+## Return Contract
+
+Executed work returns one **Auxiliary Task Return** with:
+
+- `kind`
+- `status`
+- `verdict`
+- `hostPlanComplete`
+- `auxiliaryTaskId`
+- `runId`
+- `summary`
+- `scope`
+- `evidence`
+- `blockers`
+- `findings`
+- `followups`
+- `coordinationAdvice`
+
+`status: "completed"` only means the **Auxiliary Task** completed. It does not mean the **Host Plan** is complete.
+
+Long artifacts belong under `.oma/artifacts/` and should be referenced from the return instead of pasted into the Host Agent conversation.
+
+## Companion Capabilities
+
+`capabilities/acpx-tui` is linked as a companion ACPX session operator console.
+
+It improves OMA's ACPX workflow by making sessions observable and recoverable: developers can inspect ACPX session state, watch event streams, send prompts, and resume into an agent session when an auxiliary execution needs human inspection or handoff.
+
+It is not part of the core `oma run` decision loop. OMA remains proposal-first, the **Host Agent** still owns the **Host Plan**, and the TUI does not turn OMA into a full workflow runtime.
+
+Clone with submodules when you want the TUI available:
 
 ```bash
-openclaw skills list | grep acp-orchestrator
-# 应显示: acp-orchestrator  ready  ...
+git submodule update --init --recursive
 ```
 
-### 配置 openclaw.json（必须）
+## Boundaries
 
-**`sessions_spawn` 的 ACP agent 白名单由 `acp.allowedAgents` 控制**，不是 `agents.list`。必须显式配置，否则 `sessions_spawn` 只能看到 `main`。
+In scope for this MVP:
 
-```json
-// ~/.openclaw/openclaw.json
-{
-  "acp": {
-    "defaultAgent": "codex",
-    "allowedAgents": ["claude", "codex", "trae", "gemini"]
-  },
-  "plugins": {
-    "entries": {
-      "acpx": {
-        "enabled": true,
-        "config": {
-          "permissionMode": "approve-all"
-        }
-      }
-    }
-  }
-}
-```
+- proposal-first `oma run`
+- interactive installation for all skills under `skills/` with `oma install`
+- explicit `oma run --execute` with fake/local or ACPX-backed routes
+- unified **Auxiliary Task Return**
+- `oma result show <task-id>` for **Auxiliary Result Inspection**
+- `oma schema`
+- small TypeScript core modules and CLI
 
-> **注意**：`permissionMode` 默认是 `approve-reads`，ACP agent 执行写/执行操作时会报 `Permission denied`。必须设为 `approve-all`。
+Out of scope for this MVP:
 
-配置后重启 OpenClaw：
-
-```bash
-pkill -f openclaw && openclaw serve --daemon
-```
-
-### 配置 acpx（如需自定义 agent）
-
-内置 agent（claude / codex / gemini）无需额外配置。`trae` 是否内置取决于 acpx 版本：
-
-- 较旧版本：需要在 `~/.acpx/config.json` 手动添加 `agents.trae`
-- 新版本（含 Trae built-in）：可直接 `acpx trae ...`
-
-如需添加 trae-cli 或其他自定义 agent：
-
-```bash
-# 复制配置模板
-cp config/acpx-config.json ~/.acpx/config.json
-# 或完整版（含路由分类和 fallback 配置）
-cp config/acpx-config-full.json ~/.acpx/config.json
-```
-
-## 使用
-
-skill 安装后，在对话中使用触发词即可激活：
-
-```
-用户：用多个 agent 并行创建一个博客系统
-用户：分派任务，前端 React，后端 Node.js
-用户：multi-agent orchestrate this project
-```
-
-或者在对话中直接引用 skill 的能力：
-
-```
-用户：创建一个博客系统，前端 React，后端 Node.js，带测试
-
-→ agent 自动按 SKILL.md 规则执行：
-  架构设计 → claude (subagent, 稳定)
-  后端 API → codex (acp, 能力强)
-  前端 UI → trae (acp, 快速)
-  测试    → codex (acp)
-```
-
-### 混合运行时策略
-
-这是本项目的核心改进。基于[稳定性调研报告](docs/runtime-stability-research-report-2026-03-22.md)：
-
-| 任务类型 | 运行时 | 原因 |
-|---|---|---|
-| 规划 / 调研 / 汇总 | `subagent` | 完成通告 ≥99% 稳定 |
-| 编码 / 重构 / 修改 | `acp` + `streamTo:"parent"` | coding harness 能力更强 |
-
-ACP relay stall 时自动降级：
-
-```
-acp + streamTo:parent → child 结果回捞 → direct acpx → subagent
-```
-
-## 类别路由
-
-| 类别 | 任务类型 | Agent | 运行时 |
-|---|---|---|---|
-| ultrabrain | 复杂架构、深度推理 | claude | subagent |
-| deep | 多文件重构 | claude | subagent |
-| visual-engineering | 前端 UI、CSS | trae | acp |
-| standard | 常规开发、CRUD | codex | acp |
-| quick | 单文件、小修改 | trae | acp |
-| writing | 文档、注释 | trae | subagent |
-| explore | 代码搜索、调研 | codex | subagent |
-
-## Agent 能力对比
-
-| 特性 | trae | codex | claude |
-|---|---|---|---|
-| **能力** | ⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐⭐⭐ |
-| **速度** | ⚡⚡⚡ | ⚡⚡ | ⚡ |
-| **中文优化** | ✅ | ❌ | ❌ |
-| **复杂架构** | ❌ | ⚠️ | ✅ |
-| **快速原型** | ✅ | ✅ | ⚠️ (overkill) |
-
-| Agent | 内置 | 需要配置 |
-|---|---|---|
-| claude / codex / gemini / copilot / kimi / qwen / cursor | ✅ | ❌ |
-| **trae** | 版本相关（旧版❌ / 新版✅） | 旧版需在 `~/.acpx/config.json` 配置，详见 `docs/acpx-agent-config.md` |
-| **pi** | ❌ | ✅ 需要在 `~/.acpx/config.json` 中配置 |
-
-### Trae CLI 快速配置（兼容写法）
-
-如果你所在环境的 acpx 还未内置 `trae`，加上这段即可：
-
-```json
-{
-  "agents": {
-    "trae": {
-      "command": "trae-cli acp serve"
-    }
-  }
-}
-```
-
-验证命令：
-
-```bash
-acpx --approve-all trae exec "Reply exactly: TRAE_OK"
-```
-
-## 项目结构
-
-```
-oh-my-acpx/
-├── SKILL.md                  # Skill 定义（OpenClaw 加载这个文件）
-├── README.md                 # 本文件
-├── config/
-│   ├── acpx-config.json      # acpx 基础配置模板
-│   └── acpx-config-full.json # 完整配置（含路由分类和 fallback）
-├── references/               # 参考文档（SKILL.md 按需引用）
-│   ├── usage-modes.md        # 5 种使用模式 + 3 种运行环境
-│   ├── agent-routing.md      # Agent 能力分层、路由表、对比
-│   ├── acp-fallback.md       # ACP relay stall 5 步兜底流程
-│   ├── config.md             # openclaw.json / acpx 配置 + 排错
-│   └── examples.md           # 实战示例 + spawn 方法论注入
-├── scripts/                  # 工具脚本
-│   ├── self-schedule.js      # 自调度检查（每个 turn 结束前运行）
-│   ├── relay-fallback.js     # ACP relay 兜底诊断（人工调试用）
-│   ├── runtime-router.js     # 路由规则查询（人工调试用）
-│   └── test-runtime-stability.sh  # 稳定性测试套件
-├── examples/
-│   ├── quick-task.md
-│   ├── parallel-task.md
-│   └── waterfall-task.md
-└── docs/
-    ├── agents.md
-    ├── best-practices.md
-    ├── acp-relay-fallback.md
-    ├── acpx-agent-config.md
-    └── runtime-stability-research-report-2026-03-22.md
-```
-
-## 架构
-
-```
-OpenClaw core → acpx plugin (extension) → acpx CLI → ACP JSON-RPC → coding agent
-                     ↑
-              ~/.openclaw/extensions/acpx/
-```
-
-`SKILL.md` 作为 orchestrator agent 的行为指令被加载。Agent 读取后：
-- 按路由表选择 runtime 和 agent
-- 调用 `sessions_spawn` / `sessions_yield` 执行任务
-- relay stall 时按降级链路自动恢复
-
-不需要修改 OpenClaw 核心或 acpx 插件。等上游 RFC #49782（统一 relay 方案）落地后，去掉 SKILL.md 中的兜底指令即可。
-
-## 调试工具
-
-`scripts/` 目录下的工具用于**人工诊断**，不是运行时依赖：
-
-```bash
-# 诊断 relay 状态
-node scripts/relay-fallback.js --stream-log <path>
-
-# 实时监控 + 自动兜底
-node scripts/relay-fallback.js --watch --stream-log <path> --timeout 75
-
-# 查询路由规则
-node scripts/runtime-router.js --category standard
-
-# 跑稳定性测试套件
-bash scripts/test-runtime-stability.sh
-bash scripts/test-runtime-stability.sh --test 3  # 单跑第 3 项
-```
-
-## 已知问题
-
-- **ACP relay 间歇性 stall**：`streamTo:"parent"` 时 parent 只收到 `start` + `stall`，无 `done`。child 实际已完成。已通过混合策略 + 降级兜底缓解。跟踪上游 [#49782](https://github.com/openclaw/openclaw/issues/49782)。
-- **混合 E2E 多步工作流**：单次 agent turn 时间不足时，subagent 规划 → acp 编码的两步流程可能需要拆成多次 turn。
-
-## 致谢
-
-- 基于 [OpenClaw](https://openclaw.ai) ACP runtime
-- 使用 [acpx](https://github.com/openclaw/acpx) 作为 ACP 客户端
-
-## License
-
-MIT
+- broad ACPX provider abstraction
+- full team/swarm orchestration
+- UI/HUD in OMA core
+- broad autopilot behavior
+- ownership of the **Host Plan**
