@@ -1,7 +1,6 @@
 {
-  "name": "oma",
+  "name": "oh-my-acpx",
   "version": "0.2.0",
-  "private": true,
   "description": "OMA context-saving auxiliary offload sidecar for host agents using ACPX.",
   "type": "commonjs",
   "engines": {
