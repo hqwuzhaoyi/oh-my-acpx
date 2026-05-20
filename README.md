@@ -46,7 +46,7 @@ oma install
 `oma install` installs every bundled skill under `skills/` globally by running:
 
 ```bash
-npx skill install --global --all <oh-my-acpx>/skills
+npx skills add <oh-my-acpx>/skills --global --all --full-depth
 ```
 
 Single-skill install is not supported by this command.

@@ -1946,7 +1946,7 @@ describe("oma CLI", () => {
       [
       {
         command: "npx",
-        args: ["skill", "install", "--global", "--all", skillsPath()],
+        args: ["skills", "add", skillsPath(), "--global", "--all", "--full-depth"],
       },
       ],
     );
@@ -1968,7 +1968,7 @@ describe("oma CLI", () => {
     assert.equal(body.status, "SKILLS_INSTALLED");
     assert.deepEqual(calls[0], {
       command: "npx",
-      args: ["skill", "install", "--global", "--all", skillsPath()],
+      args: ["skills", "add", skillsPath(), "--global", "--all", "--full-depth"],
     });
   });
 

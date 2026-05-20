@@ -380,7 +380,7 @@ async function installCommand(
   ) => Promise<CommandResult>,
 ): Promise<CliResult> {
   const source = resolve(__dirname, "..", "..", "..", "skills");
-  const commandArgs = ["skill", "install", "--global", "--all", source];
+  const commandArgs = ["skills", "add", source, "--global", "--all", "--full-depth"];
   const commandResult = await execute("npx", commandArgs, cleanNestedNpxEnv(process.env), "inherit");
 
   return {
