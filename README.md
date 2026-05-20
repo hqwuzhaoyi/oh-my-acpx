@@ -1,5 +1,7 @@
 # OMA (`oh-my-acpx`)
 
+[English](./README.md) | [简体中文](./README.zh-CN.md)
+
 Install `oh-my-acpx`, run `oma install`, then let your agent use the installed OMA skills to offload bounded auxiliary work through ACPX when it is worth saving main-context space.
 
 [![npm version](https://img.shields.io/npm/v/oh-my-acpx)](https://www.npmjs.com/package/oh-my-acpx) [![Node.js](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org)

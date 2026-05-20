@@ -24,6 +24,7 @@
     "docs/adr/*.md",
     "docs/oma-acpx-init.md",
     "README.md",
+    "README.zh-CN.md",
     "skills/**/*.md"
   ],
   "devDependencies": {
