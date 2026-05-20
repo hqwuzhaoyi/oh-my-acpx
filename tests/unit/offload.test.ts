@@ -1927,7 +1927,7 @@ describe("oma CLI", () => {
     assert.equal(body.version, packageJson.version);
   });
 
-  test("install starts interactive installation for all skills", async () => {
+  test("install starts global installation for all bundled skills", async () => {
     const calls: Array<{ command: string; args: string[]; env?: NodeJS.ProcessEnv; stdio?: string }> = [];
 
     const result = await runCli(["install"], {
@@ -1946,7 +1946,7 @@ describe("oma CLI", () => {
       [
       {
         command: "npx",
-        args: ["skills@latest", "add", skillsPath(), "--full-depth", "-f"],
+        args: ["skill", "install", "--global", "--all", skillsPath()],
       },
       ],
     );
@@ -1968,7 +1968,7 @@ describe("oma CLI", () => {
     assert.equal(body.status, "SKILLS_INSTALLED");
     assert.deepEqual(calls[0], {
       command: "npx",
-      args: ["skills@latest", "add", skillsPath(), "--full-depth", "-f"],
+      args: ["skill", "install", "--global", "--all", skillsPath()],
     });
   });
 
