@@ -1933,24 +1933,34 @@ describe("oma CLI", () => {
     const result = await runCli(["install"], {
       executeCommand: async (command, args, env, stdio) => {
         calls.push({ command, args, env, stdio });
+        if (command === "acpx") {
+          return { exitCode: 0, stdout: "0.8.0\n", stderr: "" };
+        }
         return { exitCode: 0, stdout: "installed", stderr: "" };
       },
     });
     const body = bodyAsRecord(result.body);
 
     assert.equal(result.exitCode, 0);
-    assert.equal(body.status, "SKILLS_INSTALLED");
+    assert.equal(body.status, "OMA_INSTALLED");
     assert.equal(body.source, skillsPath());
     assert.deepEqual(
       calls.map(({ command, args }) => ({ command, args })),
       [
-      {
-        command: "npx",
-        args: ["skill", "install", "--global", "--all", skillsPath()],
-      },
+        {
+          command: "npx",
+          args: ["skills", "add", skillsPath(), "--global", "--all", "--full-depth"],
+        },
+        {
+          command: "acpx",
+          args: ["--version"],
+        },
       ],
     );
     assert.equal(calls[0].stdio, "inherit");
+    assert.equal(body.skills.status, "SKILLS_INSTALLED");
+    assert.equal(body.acpx.status, "ACPX_PRESENT");
+    assert.equal(body.acpx.version, "0.8.0");
   });
 
   test("install ignores skill arguments and installs all skills", async () => {
@@ -1959,17 +1969,99 @@ describe("oma CLI", () => {
     const result = await runCli(["install", "oma"], {
       executeCommand: async (command, args) => {
         calls.push({ command, args });
+        if (command === "acpx") {
+          return { exitCode: 0, stdout: "0.8.0\n", stderr: "" };
+        }
         return { exitCode: 0, stdout: "", stderr: "" };
       },
     });
     const body = bodyAsRecord(result.body);
 
     assert.equal(result.exitCode, 0);
-    assert.equal(body.status, "SKILLS_INSTALLED");
+    assert.equal(body.status, "OMA_INSTALLED");
     assert.deepEqual(calls[0], {
       command: "npx",
-      args: ["skill", "install", "--global", "--all", skillsPath()],
+      args: ["skills", "add", skillsPath(), "--global", "--all", "--full-depth"],
     });
+  });
+
+  test("install asks before installing acpx globally when it is missing", async () => {
+    const calls: Array<{ command: string; args: string[]; stdio?: string }> = [];
+    const prompts: string[] = [];
+
+    const result = await runCli(["install"], {
+      confirmAcpxInstall: async (message) => {
+        prompts.push(message);
+        return true;
+      },
+      executeCommand: async (command, args, _env, stdio) => {
+        calls.push({ command, args, stdio });
+        if (command === "acpx") {
+          return { exitCode: 127, stdout: "", stderr: "acpx: command not found" };
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    });
+    const body = bodyAsRecord(result.body);
+
+    assert.equal(result.exitCode, 0);
+    assert.equal(body.status, "OMA_INSTALLED");
+    assert.deepEqual(
+      calls.map(({ command, args }) => ({ command, args })),
+      [
+        {
+          command: "npx",
+          args: ["skills", "add", skillsPath(), "--global", "--all", "--full-depth"],
+        },
+        {
+          command: "acpx",
+          args: ["--version"],
+        },
+        {
+          command: "npm",
+          args: ["install", "-g", "acpx"],
+        },
+      ],
+    );
+    assert.equal(calls[0].stdio, "inherit");
+    assert.equal(calls[2].stdio, "inherit");
+    assert.equal(prompts.length, 1);
+    assert.match(prompts[0], /acpx is not installed/i);
+    assert.equal(body.acpx.status, "ACPX_INSTALLED");
+  });
+
+  test("install skips acpx installation when the user declines", async () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
+
+    const result = await runCli(["install"], {
+      confirmAcpxInstall: async () => false,
+      executeCommand: async (command, args) => {
+        calls.push({ command, args });
+        if (command === "acpx") {
+          return { exitCode: 127, stdout: "", stderr: "acpx: command not found" };
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    });
+    const body = bodyAsRecord(result.body);
+
+    assert.equal(result.exitCode, 0);
+    assert.equal(body.status, "OMA_INSTALLED");
+    assert.deepEqual(
+      calls.map(({ command, args }) => ({ command, args })),
+      [
+        {
+          command: "npx",
+          args: ["skills", "add", skillsPath(), "--global", "--all", "--full-depth"],
+        },
+        {
+          command: "acpx",
+          args: ["--version"],
+        },
+      ],
+    );
+    assert.equal(body.acpx.status, "ACPX_INSTALL_SKIPPED");
+    assert.match(String(body.acpx.summary), /npm install -g acpx/);
   });
 
   test("install strips npm npx environment variables before nested npx", async () => {
@@ -1982,8 +2074,11 @@ describe("oma CLI", () => {
       process.env.INIT_CWD = "/tmp/from-parent-npx";
 
       const result = await runCli(["install"], {
-        executeCommand: async (_command, _args, env) => {
+        executeCommand: async (command, _args, env) => {
           capturedEnv = env;
+          if (command === "acpx") {
+            return { exitCode: 0, stdout: "0.8.0\n", stderr: "" };
+          }
           return { exitCode: 0, stdout: "", stderr: "" };
         },
       });
@@ -2015,7 +2110,12 @@ describe("oma CLI", () => {
         executeCommand: async (command, args) => {
           assert.equal(command, "acpx");
           assert.deepEqual(args, ["--help"]);
-          return { exitCode: 0, stdout: "Commands:\n  codex [options] [prompt...]                Use codex agent\n  claude [options] [prompt...]                Use claude agent\n", stderr: "" };
+          return {
+            exitCode: 0,
+            stdout:
+              "Commands:\n  codex [options] [prompt...]                Use codex agent\n  claude [options] [prompt...]                Use claude agent\n  gemini [options] [prompt...]                Use gemini agent\n",
+            stderr: "",
+          };
         },
       });
       const body = bodyAsRecord(result.body);
@@ -2023,12 +2123,22 @@ describe("oma CLI", () => {
 
       assert.equal(result.exitCode, 0);
       assert.equal(body.status, "AGENT_ONBOARDING_READY");
-      assert.deepEqual(body.declaredAdapters, ["codex", "claude"]);
+      assert.deepEqual(body.declaredAdapters, ["codex", "claude", "gemini"]);
       assert.equal("supportedAgents" in body, false);
       assert.equal("availableAgents" in body, false);
       assert.deepEqual(body.availableRoles, ["quick", "deep", "visual"]);
       assert.deepEqual(body.availablePermissions, ["read", "edit"]);
       assert.deepEqual(body.availableScopes, ["project", "global"]);
+      assert.deepEqual(body.recommendedRoles, {
+        codex: "deep",
+        claude: "deep",
+        gemini: "visual",
+      });
+      assert.deepEqual(body.recommendedApprovalCommands, {
+        codex: "oma acpx approve --agent codex --role deep --permissions edit --scope project",
+        claude: "oma acpx approve --agent claude --role deep --permissions edit --scope project",
+        gemini: "oma acpx approve --agent gemini --role visual --permissions edit --scope project",
+      });
       assert.equal(body.recommendedApprovalCommand, "oma acpx approve --agent codex --role deep --permissions edit --scope project");
       assert.match(String(body.summary), /declared ACPX adapters/i);
       assert.match(String(body.summary), /does not prove the user can run them/i);
@@ -2078,11 +2188,70 @@ describe("oma CLI", () => {
 
       assert.equal(result.exitCode, 0);
       assert.deepEqual(body.declaredAdapters, ["gemini"]);
-      assert.equal(body.recommendedApprovalCommand, "oma acpx approve --agent gemini --role deep --permissions edit --scope project");
+      assert.deepEqual(body.recommendedRoles, { gemini: "visual" });
+      assert.deepEqual(body.recommendedApprovalCommands, {
+        gemini: "oma acpx approve --agent gemini --role visual --permissions edit --scope project",
+      });
+      assert.equal(body.recommendedApprovalCommand, "oma acpx approve --agent gemini --role visual --permissions edit --scope project");
     } finally {
       process.chdir(previousCwd);
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  test("install can inspect declared ACPX adapters and report per-agent role recommendations", async () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
+
+    const result = await runCli(["install", "--inspect-agents"], {
+      executeCommand: async (command, args) => {
+        calls.push({ command, args });
+        if (command === "acpx" && args[0] === "--version") {
+          return { exitCode: 0, stdout: "0.8.0\n", stderr: "" };
+        }
+        if (command === "acpx" && args[0] === "--help") {
+          return {
+            exitCode: 0,
+            stdout:
+              "Commands:\n  claude [options] [prompt...]                Use claude agent\n  gemini [options] [prompt...]                Use gemini agent\n",
+            stderr: "",
+          };
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    });
+    const body = bodyAsRecord(result.body);
+
+    assert.equal(result.exitCode, 0);
+    assert.deepEqual(
+      calls.map(({ command, args }) => ({ command, args })),
+      [
+        {
+          command: "npx",
+          args: ["skills", "add", skillsPath(), "--global", "--all", "--full-depth"],
+        },
+        {
+          command: "acpx",
+          args: ["--version"],
+        },
+        {
+          command: "acpx",
+          args: ["--help"],
+        },
+      ],
+    );
+    assert.deepEqual(body.agentDiscovery, {
+      status: "AGENT_DISCOVERY_READY",
+      declaredAdapters: ["claude", "gemini"],
+      recommendedRoles: {
+        claude: "deep",
+        gemini: "visual",
+      },
+      recommendedApprovalCommands: {
+        claude: "oma acpx approve --agent claude --role deep --permissions edit --scope project",
+        gemini: "oma acpx approve --agent gemini --role visual --permissions edit --scope project",
+      },
+      summary: "Declared ACPX adapters discovered. These are candidates only until the user confirms they are configured and approves them for OMA.",
+    });
   });
 
   test("acpx init reports structured discovery failure when acpx help fails", async () => {

@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, normalize, resolve } from "node:path";
 import { spawn } from "node:child_process";
+import { createInterface } from "node:readline/promises";
 
 import {
   type ApprovedAgentConfig,
@@ -42,6 +43,7 @@ export interface CliOptions {
     env: NodeJS.ProcessEnv,
     stdio?: "inherit" | "pipe",
   ) => Promise<CommandResult>;
+  confirmAcpxInstall?: (message: string) => Promise<boolean>;
 }
 
 export async function runCli(args: string[], options: CliOptions = {}): Promise<CliResult> {
@@ -73,7 +75,7 @@ export async function runCli(args: string[], options: CliOptions = {}): Promise<
     case "setup":
       return setupCommand();
     case "install":
-      return installCommand(rest, options.executeCommand ?? executeCommand);
+      return installCommand(rest, options.executeCommand ?? executeCommand, options.confirmAcpxInstall ?? confirmAcpxInstall);
     case "result":
       return resultCommand(rest);
     case "run":
@@ -239,9 +241,9 @@ async function acpxInitCommand(
     };
   }
   const recommendedAgent = declaredAdapters.includes("codex") ? "codex" : declaredAdapters[0];
-  const recommendedApprovalCommand = recommendedAgent
-    ? `oma acpx approve --agent ${recommendedAgent} --role ${recommendedRoleForAgent(recommendedAgent)} --permissions edit --scope project`
-    : undefined;
+  const recommendedRoles = recommendedRolesForAgents(declaredAdapters);
+  const recommendedApprovalCommands = recommendedApprovalCommandsForAgents(declaredAdapters);
+  const recommendedApprovalCommand = recommendedAgent ? recommendedApprovalCommands[recommendedAgent] : undefined;
 
   return {
     exitCode: 0,
@@ -251,7 +253,8 @@ async function acpxInitCommand(
       availableRoles: ["quick", "deep", "visual"],
       availablePermissions: ["read", "edit"],
       availableScopes: ["project", "global"],
-      recommendedRoles: Object.fromEntries(declaredAdapters.map((agent) => [agent, recommendedRoleForAgent(agent)])),
+      recommendedRoles,
+      recommendedApprovalCommands,
       recommendedApprovalCommand,
       summary:
         "Declared ACPX adapters discovered. This does not prove the user can run them; ask which adapters are configured and usable before approving roles, permissions, and scope.",
@@ -347,13 +350,58 @@ function loadExistingApprovedAgentsForWrite(
 }
 
 function recommendedRoleForAgent(agent: string): "quick" | "deep" | "visual" {
-  if (["cursor"].includes(agent)) {
+  if (["cursor", "gemini"].includes(agent)) {
     return "visual";
   }
   if (["pi", "qwen", "kimi", "iflow"].includes(agent)) {
     return "quick";
   }
   return "deep";
+}
+
+function recommendedRolesForAgents(agents: string[]): Record<string, "quick" | "deep" | "visual"> {
+  return Object.fromEntries(agents.map((agent) => [agent, recommendedRoleForAgent(agent)]));
+}
+
+function recommendedApprovalCommandForAgent(agent: string): string {
+  return `oma acpx approve --agent ${agent} --role ${recommendedRoleForAgent(agent)} --permissions edit --scope project`;
+}
+
+function recommendedApprovalCommandsForAgents(agents: string[]): Record<string, string> {
+  return Object.fromEntries(agents.map((agent) => [agent, recommendedApprovalCommandForAgent(agent)]));
+}
+
+async function discoverAcpxAgents(
+  execute: (
+    command: string,
+    args: string[],
+    env: NodeJS.ProcessEnv,
+    stdio?: "inherit" | "pipe",
+  ) => Promise<CommandResult>,
+  env: NodeJS.ProcessEnv,
+): Promise<Record<string, unknown>> {
+  const detected = await execute("acpx", ["--help"], env);
+  const discoveryOutput = `${detected.stdout}\n${detected.stderr}`;
+  const declaredAdapters = parseAcpxAgents(discoveryOutput);
+
+  if (detected.exitCode !== 0) {
+    return {
+      status: "AGENT_DISCOVERY_FAILED",
+      declaredAdapters,
+      error: detected.stderr || detected.stdout || "acpx --help failed.",
+      summary:
+        "OMA could not inspect declared ACPX adapters. Fix or verify ACPX before approving agents for OMA.",
+    };
+  }
+
+  return {
+    status: "AGENT_DISCOVERY_READY",
+    declaredAdapters,
+    recommendedRoles: recommendedRolesForAgents(declaredAdapters),
+    recommendedApprovalCommands: recommendedApprovalCommandsForAgents(declaredAdapters),
+    summary:
+      "Declared ACPX adapters discovered. These are candidates only until the user confirms they are configured and approves them for OMA.",
+  };
 }
 
 function parseNamedArgs(args: string[]): Record<string, string | undefined> {
@@ -371,28 +419,137 @@ function parseNamedArgs(args: string[]): Record<string, string | undefined> {
 }
 
 async function installCommand(
-  _args: string[],
+  args: string[],
   execute: (
     command: string,
     args: string[],
     env: NodeJS.ProcessEnv,
     stdio?: "inherit" | "pipe",
   ) => Promise<CommandResult>,
+  confirmInstallAcpx: (message: string) => Promise<boolean>,
 ): Promise<CliResult> {
   const source = resolve(__dirname, "..", "..", "..", "skills");
-  const commandArgs = ["skill", "install", "--global", "--all", source];
-  const commandResult = await execute("npx", commandArgs, cleanNestedNpxEnv(process.env), "inherit");
+  const installEnv = cleanNestedNpxEnv(process.env);
+  const shouldInspectAgents = args.includes("--inspect-agents") || args.includes("--list-agents");
+  const skillCommandArgs = ["skills", "add", source, "--global", "--all", "--full-depth"];
+  const skillResult = await execute("npx", skillCommandArgs, installEnv, "inherit");
+
+  const skillInstall = {
+    status: skillResult.exitCode === 0 ? "SKILLS_INSTALLED" : "SKILLS_INSTALL_FAILED",
+    source,
+    command: ["npx", ...skillCommandArgs],
+    stdout: skillResult.stdout,
+    stderr: skillResult.stderr,
+  };
+
+  if (skillResult.exitCode !== 0) {
+    return {
+      exitCode: skillResult.exitCode,
+      body: {
+        status: "SKILLS_INSTALL_FAILED",
+        source,
+        command: skillInstall.command,
+        stdout: skillResult.stdout,
+        stderr: skillResult.stderr,
+        skills: skillInstall,
+      },
+    };
+  }
+
+  const acpxCheckArgs = ["--version"];
+  const acpxCheck = await execute("acpx", acpxCheckArgs, installEnv);
+  if (acpxCheck.exitCode === 0) {
+    const agentDiscovery = shouldInspectAgents ? await discoverAcpxAgents(execute, installEnv) : undefined;
+    return {
+      exitCode: 0,
+      body: {
+        status: "OMA_INSTALLED",
+        source,
+        command: skillInstall.command,
+        stdout: skillResult.stdout,
+        stderr: skillResult.stderr,
+        skills: skillInstall,
+        acpx: {
+          status: "ACPX_PRESENT",
+          command: ["acpx", ...acpxCheckArgs],
+          version: acpxCheck.stdout.trim() || acpxCheck.stderr.trim(),
+          stdout: acpxCheck.stdout,
+          stderr: acpxCheck.stderr,
+        },
+        ...(agentDiscovery ? { agentDiscovery } : {}),
+      },
+    };
+  }
+
+  const shouldInstallAcpx =
+    args.includes("--yes") || args.includes("-y") || (
+      !args.includes("--no-acpx") &&
+      await confirmInstallAcpx("acpx is not installed. Install it globally with `npm install -g acpx` now? [y/N] ")
+    );
+
+  if (!shouldInstallAcpx) {
+    return {
+      exitCode: 0,
+      body: {
+        status: "OMA_INSTALLED",
+        source,
+        command: skillInstall.command,
+        stdout: skillResult.stdout,
+        stderr: skillResult.stderr,
+        skills: skillInstall,
+        acpx: {
+          status: "ACPX_INSTALL_SKIPPED",
+          checkCommand: ["acpx", ...acpxCheckArgs],
+          checkStdout: acpxCheck.stdout,
+          checkStderr: acpxCheck.stderr,
+          summary: "acpx is required only for real ACPX-backed Execute Mode. Install later with `npm install -g acpx`.",
+        },
+      },
+    };
+  }
+
+  const acpxInstallArgs = ["install", "-g", "acpx"];
+  const acpxInstall = await execute("npm", acpxInstallArgs, installEnv, "inherit");
+  const acpxInstallStatus = acpxInstall.exitCode === 0 ? "ACPX_INSTALLED" : "ACPX_INSTALL_FAILED";
+  const agentDiscovery = shouldInspectAgents && acpxInstall.exitCode === 0 ? await discoverAcpxAgents(execute, installEnv) : undefined;
 
   return {
-    exitCode: commandResult.exitCode,
+    exitCode: acpxInstall.exitCode,
     body: {
-      status: commandResult.exitCode === 0 ? "SKILLS_INSTALLED" : "SKILLS_INSTALL_FAILED",
+      status: acpxInstall.exitCode === 0 ? "OMA_INSTALLED" : "ACPX_INSTALL_FAILED",
       source,
-      command: ["npx", ...commandArgs],
-      stdout: commandResult.stdout,
-      stderr: commandResult.stderr,
+      command: skillInstall.command,
+      stdout: skillResult.stdout,
+      stderr: skillResult.stderr,
+      skills: skillInstall,
+      acpx: {
+        status: acpxInstallStatus,
+        checkCommand: ["acpx", ...acpxCheckArgs],
+        checkStdout: acpxCheck.stdout,
+        checkStderr: acpxCheck.stderr,
+        command: ["npm", ...acpxInstallArgs],
+        stdout: acpxInstall.stdout,
+        stderr: acpxInstall.stderr,
+      },
+      ...(agentDiscovery ? { agentDiscovery } : {}),
     },
   };
+}
+
+async function confirmAcpxInstall(message: string): Promise<boolean> {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    return false;
+  }
+  const readline = createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+  try {
+    const answer = await readline.question(message);
+    return ["y", "yes"].includes(answer.trim().toLowerCase());
+  } finally {
+    readline.close();
+  }
 }
 
 function cleanNestedNpxEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {

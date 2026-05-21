@@ -38,7 +38,7 @@ Do not use this skill for fake/local routes, schema checks, or normal proposal-o
    - Roles: `quick`, `deep`, `visual`.
    - Permissions: `read`, `edit`.
    - Scope: `project`, `global`.
-7. Ask the user which candidate adapters are configured and usable in this environment, then which of those to approve. Recommend one role per approved agent, and confirm edit/read permissions and project/global scope.
+7. Ask the user which candidate adapters are configured and usable in this environment, then which of those to approve. Recommend one role per approved agent, not one global role for every selected agent, and confirm edit/read permissions and project/global scope.
 8. Run `oma acpx approve --agent <name> --role <role> --permissions <read|edit> --scope <project|global>` for each approved agent.
 9. Confirm that `.oma/config/agents.json` or `~/.oma/config/agents.json` was written.
 10. If the original task was blocked, retry `oma run <plan-path> --execute`.
@@ -52,7 +52,7 @@ Use concise questions. The user should not need to understand internal routing f
 - State that Declared ACPX adapters are only candidates, not proof of user access.
 - If there is only one candidate adapter, ask whether it is configured and usable before asking whether to approve it.
 - If there are multiple, ask the user to choose one or more agent names.
-- Recommend one role per selected agent: `quick`, `deep`, or `visual`.
+- Recommend one role per selected agent: `quick`, `deep`, or `visual`. Do not flatten all selected agents to a single shared role.
 - Ask once whether selected agents may edit files. Default is edit.
 - Ask whether approval should be project-only or global. Default is project unless the user explicitly wants the same approval across projects.
 
@@ -77,7 +77,8 @@ Which adapters are configured and usable here, and which roles, permissions, and
 After the user approves, write the approval through the non-interactive CLI:
 
 ```bash
-oma acpx approve --agent codex --role deep --permissions edit --scope project
+oma acpx approve --agent claude --role deep --permissions edit --scope project
+oma acpx approve --agent gemini --role visual --permissions edit --scope project
 ```
 
 Role meanings:
@@ -88,9 +89,9 @@ Role meanings:
 
 Default recommendations:
 
-- `cursor` -> `visual`
+- `cursor`, `gemini` -> `visual`
 - `pi`, `qwen`, `kimi`, `iflow` -> `quick`
-- `claude`, `codex`, `gemini`, `droid`, and unknown agents -> `deep`
+- `claude`, `codex`, `droid`, and unknown agents -> `deep`
 
 Permissions:
 
@@ -99,6 +100,8 @@ Permissions:
 - Default to `edit`, but let the user mark specific agents as read-only.
 
 ## Commands
+
+If `acpx` is not installed, ask the user to run `oma install` first. In interactive terminals, `oma install` asks whether to install `acpx` globally with `npm install -g acpx`; non-interactive runs skip ACPX installation unless `--yes` is passed. The user can also install ACPX directly with `npm install -g acpx`.
 
 Build first if the workspace is using source directly:
 
