@@ -49,7 +49,15 @@ oma install
 npx skills add <oh-my-acpx>/skills --global --all --full-depth
 ```
 
-It also checks whether `acpx` is available and runs `npm install -g acpx` when the command is missing. Single-skill install is not supported by this command.
+It also checks whether `acpx` is available. When the command is missing, interactive terminals ask whether to run `npm install -g acpx`; non-interactive runs skip ACPX installation unless you pass `--yes`. Single-skill install is not supported by this command.
+
+To inspect currently declared ACPX adapters during install, run:
+
+```bash
+oma install --inspect-agents
+```
+
+The discovery output reports candidate adapters and per-agent role recommendations, such as `claude -> deep` and `gemini -> visual`. These are still candidates until the user confirms they are configured and approves them with `oma acpx approve`.
 
 ### Source Checkout
 
@@ -112,6 +120,7 @@ These commands are useful for skills, debugging, and operator workflows, but the
 oma setup
 oma acpx init
 oma acpx approve --agent codex --role deep --permissions edit --scope project
+oma acpx approve --agent gemini --role visual --permissions edit --scope project
 oma run .oma/plans/plan.json
 oma run .oma/plans/plan.json --execute
 oma result show <task-id>
