@@ -1933,24 +1933,34 @@ describe("oma CLI", () => {
     const result = await runCli(["install"], {
       executeCommand: async (command, args, env, stdio) => {
         calls.push({ command, args, env, stdio });
+        if (command === "acpx") {
+          return { exitCode: 0, stdout: "0.8.0\n", stderr: "" };
+        }
         return { exitCode: 0, stdout: "installed", stderr: "" };
       },
     });
     const body = bodyAsRecord(result.body);
 
     assert.equal(result.exitCode, 0);
-    assert.equal(body.status, "SKILLS_INSTALLED");
+    assert.equal(body.status, "OMA_INSTALLED");
     assert.equal(body.source, skillsPath());
     assert.deepEqual(
       calls.map(({ command, args }) => ({ command, args })),
       [
-      {
-        command: "npx",
-        args: ["skills", "add", skillsPath(), "--global", "--all", "--full-depth"],
-      },
+        {
+          command: "npx",
+          args: ["skills", "add", skillsPath(), "--global", "--all", "--full-depth"],
+        },
+        {
+          command: "acpx",
+          args: ["--version"],
+        },
       ],
     );
     assert.equal(calls[0].stdio, "inherit");
+    assert.equal(body.skills.status, "SKILLS_INSTALLED");
+    assert.equal(body.acpx.status, "ACPX_PRESENT");
+    assert.equal(body.acpx.version, "0.8.0");
   });
 
   test("install ignores skill arguments and installs all skills", async () => {
@@ -1959,17 +1969,58 @@ describe("oma CLI", () => {
     const result = await runCli(["install", "oma"], {
       executeCommand: async (command, args) => {
         calls.push({ command, args });
+        if (command === "acpx") {
+          return { exitCode: 0, stdout: "0.8.0\n", stderr: "" };
+        }
         return { exitCode: 0, stdout: "", stderr: "" };
       },
     });
     const body = bodyAsRecord(result.body);
 
     assert.equal(result.exitCode, 0);
-    assert.equal(body.status, "SKILLS_INSTALLED");
+    assert.equal(body.status, "OMA_INSTALLED");
     assert.deepEqual(calls[0], {
       command: "npx",
       args: ["skills", "add", skillsPath(), "--global", "--all", "--full-depth"],
     });
+  });
+
+  test("install installs acpx globally when it is missing", async () => {
+    const calls: Array<{ command: string; args: string[]; stdio?: string }> = [];
+
+    const result = await runCli(["install"], {
+      executeCommand: async (command, args, _env, stdio) => {
+        calls.push({ command, args, stdio });
+        if (command === "acpx") {
+          return { exitCode: 127, stdout: "", stderr: "acpx: command not found" };
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    });
+    const body = bodyAsRecord(result.body);
+
+    assert.equal(result.exitCode, 0);
+    assert.equal(body.status, "OMA_INSTALLED");
+    assert.deepEqual(
+      calls.map(({ command, args }) => ({ command, args })),
+      [
+        {
+          command: "npx",
+          args: ["skills", "add", skillsPath(), "--global", "--all", "--full-depth"],
+        },
+        {
+          command: "acpx",
+          args: ["--version"],
+        },
+        {
+          command: "npm",
+          args: ["install", "-g", "acpx"],
+        },
+      ],
+    );
+    assert.equal(calls[0].stdio, "inherit");
+    assert.equal(calls[2].stdio, "inherit");
+    assert.equal(body.acpx.status, "ACPX_INSTALLED");
   });
 
   test("install strips npm npx environment variables before nested npx", async () => {
@@ -1982,8 +2033,11 @@ describe("oma CLI", () => {
       process.env.INIT_CWD = "/tmp/from-parent-npx";
 
       const result = await runCli(["install"], {
-        executeCommand: async (_command, _args, env) => {
+        executeCommand: async (command, _args, env) => {
           capturedEnv = env;
+          if (command === "acpx") {
+            return { exitCode: 0, stdout: "0.8.0\n", stderr: "" };
+          }
           return { exitCode: 0, stdout: "", stderr: "" };
         },
       });

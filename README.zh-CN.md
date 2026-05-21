@@ -46,10 +46,10 @@ oma install
 `oma install` 会全局安装 `skills/` 下的所有 bundled skills，内部运行：
 
 ```bash
-npx skill install --global --all <oh-my-acpx>/skills
+npx skills add <oh-my-acpx>/skills --global --all --full-depth
 ```
 
-这个命令不支持只安装单个 skill。
+它还会检查 `acpx` 是否可用；如果命令不存在，会运行 `npm install -g acpx`。这个命令不支持只安装单个 skill。
 
 ### 源码安装
 

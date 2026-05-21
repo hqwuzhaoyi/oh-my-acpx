@@ -380,17 +380,77 @@ async function installCommand(
   ) => Promise<CommandResult>,
 ): Promise<CliResult> {
   const source = resolve(__dirname, "..", "..", "..", "skills");
-  const commandArgs = ["skills", "add", source, "--global", "--all", "--full-depth"];
-  const commandResult = await execute("npx", commandArgs, cleanNestedNpxEnv(process.env), "inherit");
+  const installEnv = cleanNestedNpxEnv(process.env);
+  const skillCommandArgs = ["skills", "add", source, "--global", "--all", "--full-depth"];
+  const skillResult = await execute("npx", skillCommandArgs, installEnv, "inherit");
+
+  const skillInstall = {
+    status: skillResult.exitCode === 0 ? "SKILLS_INSTALLED" : "SKILLS_INSTALL_FAILED",
+    source,
+    command: ["npx", ...skillCommandArgs],
+    stdout: skillResult.stdout,
+    stderr: skillResult.stderr,
+  };
+
+  if (skillResult.exitCode !== 0) {
+    return {
+      exitCode: skillResult.exitCode,
+      body: {
+        status: "SKILLS_INSTALL_FAILED",
+        source,
+        command: skillInstall.command,
+        stdout: skillResult.stdout,
+        stderr: skillResult.stderr,
+        skills: skillInstall,
+      },
+    };
+  }
+
+  const acpxCheckArgs = ["--version"];
+  const acpxCheck = await execute("acpx", acpxCheckArgs, installEnv);
+  if (acpxCheck.exitCode === 0) {
+    return {
+      exitCode: 0,
+      body: {
+        status: "OMA_INSTALLED",
+        source,
+        command: skillInstall.command,
+        stdout: skillResult.stdout,
+        stderr: skillResult.stderr,
+        skills: skillInstall,
+        acpx: {
+          status: "ACPX_PRESENT",
+          command: ["acpx", ...acpxCheckArgs],
+          version: acpxCheck.stdout.trim() || acpxCheck.stderr.trim(),
+          stdout: acpxCheck.stdout,
+          stderr: acpxCheck.stderr,
+        },
+      },
+    };
+  }
+
+  const acpxInstallArgs = ["install", "-g", "acpx"];
+  const acpxInstall = await execute("npm", acpxInstallArgs, installEnv, "inherit");
+  const acpxInstallStatus = acpxInstall.exitCode === 0 ? "ACPX_INSTALLED" : "ACPX_INSTALL_FAILED";
 
   return {
-    exitCode: commandResult.exitCode,
+    exitCode: acpxInstall.exitCode,
     body: {
-      status: commandResult.exitCode === 0 ? "SKILLS_INSTALLED" : "SKILLS_INSTALL_FAILED",
+      status: acpxInstall.exitCode === 0 ? "OMA_INSTALLED" : "ACPX_INSTALL_FAILED",
       source,
-      command: ["npx", ...commandArgs],
-      stdout: commandResult.stdout,
-      stderr: commandResult.stderr,
+      command: skillInstall.command,
+      stdout: skillResult.stdout,
+      stderr: skillResult.stderr,
+      skills: skillInstall,
+      acpx: {
+        status: acpxInstallStatus,
+        checkCommand: ["acpx", ...acpxCheckArgs],
+        checkStdout: acpxCheck.stdout,
+        checkStderr: acpxCheck.stderr,
+        command: ["npm", ...acpxInstallArgs],
+        stdout: acpxInstall.stdout,
+        stderr: acpxInstall.stderr,
+      },
     },
   };
 }

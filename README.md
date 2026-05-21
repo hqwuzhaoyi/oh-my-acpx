@@ -49,7 +49,7 @@ oma install
 npx skills add <oh-my-acpx>/skills --global --all --full-depth
 ```
 
-Single-skill install is not supported by this command.
+It also checks whether `acpx` is available and runs `npm install -g acpx` when the command is missing. Single-skill install is not supported by this command.
 
 ### Source Checkout
 
