@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, normalize, resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { delimiter, dirname, join, normalize, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 
@@ -45,6 +45,8 @@ export interface CliOptions {
   ) => Promise<CommandResult>;
   confirmAcpxInstall?: (message: string) => Promise<boolean>;
 }
+
+const KNOWN_LOCAL_CLIENTS = ["codex", "claude", "gemini", "cursor", "copilot", "opencode", "hermes", "qodercli"];
 
 export async function runCli(args: string[], options: CliOptions = {}): Promise<CliResult> {
   const [command, ...rest] = args;
@@ -225,12 +227,15 @@ async function acpxInitCommand(
   const detected = await execute("acpx", ["--help"], process.env);
   const discoveryOutput = `${detected.stdout}\n${detected.stderr}`;
   const declaredAdapters = parseAcpxAgents(discoveryOutput);
+  const localClients = inspectLocalClients(declaredAdapters, process.env);
+  const recommendedCandidates = uniqueStrings([...declaredAdapters, ...localClients.installedClients]);
   if (detected.exitCode !== 0) {
     return {
       exitCode: 1,
       body: {
         status: "AGENT_ONBOARDING_DISCOVERY_FAILED",
         declaredAdapters,
+        installedClients: localClients.installedClients,
         availableRoles: ["quick", "deep", "visual"],
         availablePermissions: ["read", "edit"],
         availableScopes: ["project", "global"],
@@ -240,9 +245,9 @@ async function acpxInitCommand(
       },
     };
   }
-  const recommendedAgent = declaredAdapters.includes("codex") ? "codex" : declaredAdapters[0];
-  const recommendedRoles = recommendedRolesForAgents(declaredAdapters);
-  const recommendedApprovalCommands = recommendedApprovalCommandsForAgents(declaredAdapters);
+  const recommendedAgent = recommendedCandidates.includes("codex") ? "codex" : recommendedCandidates[0];
+  const recommendedRoles = recommendedRolesForAgents(recommendedCandidates);
+  const recommendedApprovalCommands = recommendedApprovalCommandsForAgents(recommendedCandidates);
   const recommendedApprovalCommand = recommendedAgent ? recommendedApprovalCommands[recommendedAgent] : undefined;
 
   return {
@@ -250,14 +255,17 @@ async function acpxInitCommand(
     body: {
       status: "AGENT_ONBOARDING_READY",
       declaredAdapters,
+      installedClients: localClients.installedClients,
+      missingClients: localClients.missingClients,
       availableRoles: ["quick", "deep", "visual"],
       availablePermissions: ["read", "edit"],
       availableScopes: ["project", "global"],
       recommendedRoles,
       recommendedApprovalCommands,
+      recommendedInstalledApprovalCommands: recommendedApprovalCommandsForAgents(localClients.installedClients),
       recommendedApprovalCommand,
       summary:
-        "Declared ACPX adapters discovered. This does not prove the user can run them; ask which adapters are configured and usable before approving roles, permissions, and scope.",
+        "Declared ACPX adapters discovered and local client commands inspected. This does not prove the user can run them; ask which adapters are configured and usable before approving roles, permissions, and scope.",
     },
   };
 }
@@ -353,7 +361,7 @@ function recommendedRoleForAgent(agent: string): "quick" | "deep" | "visual" {
   if (["cursor", "gemini"].includes(agent)) {
     return "visual";
   }
-  if (["pi", "qwen", "kimi", "iflow"].includes(agent)) {
+  if (["pi", "qwen", "kimi", "iflow", "qodercli"].includes(agent)) {
     return "quick";
   }
   return "deep";
@@ -371,6 +379,42 @@ function recommendedApprovalCommandsForAgents(agents: string[]): Record<string, 
   return Object.fromEntries(agents.map((agent) => [agent, recommendedApprovalCommandForAgent(agent)]));
 }
 
+function inspectLocalClients(agents: string[], env: NodeJS.ProcessEnv): { installedClients: string[]; missingClients: string[] } {
+  const localCandidates = uniqueStrings([...agents, ...KNOWN_LOCAL_CLIENTS]);
+  const installedClients = localCandidates.filter((agent) => isCommandOnPath(agent, env));
+  return {
+    installedClients,
+    missingClients: agents.filter((agent) => !installedClients.includes(agent)),
+  };
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values)];
+}
+
+function isCommandOnPath(command: string, env: NodeJS.ProcessEnv): boolean {
+  const pathValue = env.PATH ?? "";
+  if (!pathValue) {
+    return false;
+  }
+
+  return pathValue.split(delimiter).some((directory) => {
+    if (!directory) {
+      return false;
+    }
+    const candidate = join(directory, command);
+    if (!existsSync(candidate)) {
+      return false;
+    }
+    try {
+      const stat = statSync(candidate);
+      return stat.isFile() && (stat.mode & 0o111) !== 0;
+    } catch {
+      return false;
+    }
+  });
+}
+
 async function discoverAcpxAgents(
   execute: (
     command: string,
@@ -383,11 +427,14 @@ async function discoverAcpxAgents(
   const detected = await execute("acpx", ["--help"], env);
   const discoveryOutput = `${detected.stdout}\n${detected.stderr}`;
   const declaredAdapters = parseAcpxAgents(discoveryOutput);
+  const localClients = inspectLocalClients(declaredAdapters, env);
+  const recommendedCandidates = uniqueStrings([...declaredAdapters, ...localClients.installedClients]);
 
   if (detected.exitCode !== 0) {
     return {
       status: "AGENT_DISCOVERY_FAILED",
       declaredAdapters,
+      installedClients: localClients.installedClients,
       error: detected.stderr || detected.stdout || "acpx --help failed.",
       summary:
         "OMA could not inspect declared ACPX adapters. Fix or verify ACPX before approving agents for OMA.",
@@ -397,10 +444,13 @@ async function discoverAcpxAgents(
   return {
     status: "AGENT_DISCOVERY_READY",
     declaredAdapters,
-    recommendedRoles: recommendedRolesForAgents(declaredAdapters),
-    recommendedApprovalCommands: recommendedApprovalCommandsForAgents(declaredAdapters),
+    installedClients: localClients.installedClients,
+    missingClients: localClients.missingClients,
+    recommendedRoles: recommendedRolesForAgents(recommendedCandidates),
+    recommendedApprovalCommands: recommendedApprovalCommandsForAgents(recommendedCandidates),
+    recommendedInstalledApprovalCommands: recommendedApprovalCommandsForAgents(localClients.installedClients),
     summary:
-      "Declared ACPX adapters discovered. These are candidates only until the user confirms they are configured and approves them for OMA.",
+      "Declared ACPX adapters discovered and local client commands inspected. These are candidates only until the user confirms they are configured and approves them for OMA.",
   };
 }
 

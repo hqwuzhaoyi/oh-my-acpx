@@ -15,9 +15,9 @@ Rules:
 
 - `oma setup`, `oma schema`, proposal-only `oma run`, reading/explaining an existing plan, and fake/local execution are allowed before onboarding.
 - If no valid Approved Agents config exists at `~/.oma/config/agents.json` or `.oma/config/agents.json`, must use the `oma-acpx-init` skill before `oma run <plan-path> --execute` for an `acpx` route.
-- Before asking for approval or proposing `oma acpx approve`, summarize the current approval state: project config path/status, global config path/status, existing Approved Agents, and discovered Declared ACPX adapters.
-- Treat Declared ACPX adapters as candidates only. They are not user-usable agents until the user confirms they are configured and usable in this environment, then explicitly approves them for OMA.
-- When approval is needed, show the current optional choices before recommending a command: candidate adapter names, roles (`quick`, `deep`, `visual`), permissions (`read`, `edit`), and scope (`project`, `global`).
+- Before asking for approval or proposing `oma acpx approve`, summarize the current approval state: project config path/status, global config path/status, existing Approved Agents, discovered Declared ACPX adapters, and locally installed client commands from `installedClients`.
+- Treat Declared ACPX adapters and installed client commands as candidates only. They are not user-usable agents until the user confirms they are configured and usable in this environment, then explicitly approves them for OMA.
+- When approval is needed, show the current optional choices before recommending commands: installed client names, candidate adapter names, roles (`quick`, `deep`, `visual`), permissions (`read`, `edit`), and scope (`project`, `global`). Recommend roles per selected client or adapter, for example `claude -> deep` and `gemini -> visual`, instead of using one global role for every selection.
 - Do not guess `route.agent` from model preference, defaults, or examples. Plan routes must come from Approved Agents.
 - Do not create or rewrite an ACPX Offload Plan route until the installed/approved ACPX agents are known.
 - Do not run ACPX-backed `oma run <plan-path> --execute` until this gate passes.
@@ -53,6 +53,7 @@ Use this command flow when the **Host Agent** chooses to use OMA:
 oma setup
 oma acpx init
 oma acpx approve --agent codex --role deep --permissions edit --scope project
+oma acpx approve --agent gemini --role visual --permissions edit --scope project
 oma run .oma/plans/plan.json
 oma run .oma/plans/plan.json --execute
 oma result show <task-id>

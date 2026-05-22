@@ -51,13 +51,13 @@ npx skills add <oh-my-acpx>/skills --global --all --full-depth
 
 It also checks whether `acpx` is available. When the command is missing, interactive terminals ask whether to run `npm install -g acpx`; non-interactive runs skip ACPX installation unless you pass `--yes`. Single-skill install is not supported by this command.
 
-To inspect currently declared ACPX adapters during install, run:
+To inspect currently declared ACPX adapters and locally installed client commands during install, run:
 
 ```bash
 oma install --inspect-agents
 ```
 
-The discovery output reports candidate adapters and per-agent role recommendations, such as `claude -> deep` and `gemini -> visual`. These are still candidates until the user confirms they are configured and approves them with `oma acpx approve`.
+The discovery output reports candidate adapters, installed client commands such as `codex`, `claude`, `gemini`, `cursor`, `copilot`, `opencode`, `hermes`, and `qodercli`, plus per-agent role recommendations such as `claude -> deep` and `gemini -> visual`. These are still candidates until the user confirms they are configured and approves them with `oma acpx approve`.
 
 ### Source Checkout
 
