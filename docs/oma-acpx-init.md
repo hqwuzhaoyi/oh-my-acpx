@@ -26,10 +26,10 @@ The onboarding flow should:
 3. Optionally run manual smoke checks for candidate agents before approval.
 4. Explain that declared/configured/verified does not equal approved.
 5. Ask the user which agents OMA may use in the skill, not in the CLI.
-6. Recommend one auxiliary task role for each approved agent.
+6. Recommend one auxiliary task role for each approved agent, such as `claude -> deep` and `gemini -> visual`, instead of using one global role across every selected agent.
 7. Write the result through `oma acpx approve --agent <name> --role <role> --permissions <read|edit> --scope <project|global>`.
 
-`oma acpx init` must not prompt. It returns existing approvals or discovered ACPX agents. Current CLI discovery is intentionally conservative: it does not prove that a declared adapter is configured, authenticated, or usable.
+`oma acpx init` must not prompt. It returns existing approvals or discovered ACPX agents, plus PATH-inspected `installedClients`, per-agent `recommendedRoles`, `recommendedApprovalCommands`, and `recommendedInstalledApprovalCommands`. Installed client discovery checks known terminal client commands including `codex`, `claude`, `gemini`, `cursor`, `copilot`, `opencode`, `hermes`, and `qodercli`. Current CLI discovery is intentionally conservative: it does not prove that a declared or locally installed adapter is configured, authenticated, or usable.
 
 ## Persisted config
 
@@ -50,6 +50,11 @@ Example:
       "approved": true,
       "role": "deep",
       "permissions": "read"
+    },
+    "gemini": {
+      "approved": true,
+      "role": "visual",
+      "permissions": "edit"
     }
   }
 }

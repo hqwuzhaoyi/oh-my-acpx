@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, test } from "node:test";
@@ -2104,7 +2104,14 @@ describe("oma CLI", () => {
   test("acpx init discovers declared ACPX adapters without presenting them as user-usable agents", async () => {
     const dir = mkdtempSync(join(tmpdir(), "oma-acpx-init-"));
     const previousCwd = process.cwd();
+    const previousPath = process.env.PATH;
+    const binDir = mkdtempSync(join(tmpdir(), "oma-installed-clients-"));
     try {
+      for (const command of ["codex", "claude", "gemini", "cursor", "copilot", "opencode", "hermes", "qodercli"]) {
+        writeFileSync(join(binDir, command), "#!/bin/sh\n");
+        chmodSync(join(binDir, command), 0o755);
+      }
+      process.env.PATH = binDir;
       process.chdir(dir);
       const result = await runCli(["acpx", "init"], {
         executeCommand: async (command, args) => {
@@ -2124,6 +2131,8 @@ describe("oma CLI", () => {
       assert.equal(result.exitCode, 0);
       assert.equal(body.status, "AGENT_ONBOARDING_READY");
       assert.deepEqual(body.declaredAdapters, ["codex", "claude", "gemini"]);
+      assert.deepEqual(body.installedClients, ["codex", "claude", "gemini", "cursor", "copilot", "opencode", "hermes", "qodercli"]);
+      assert.deepEqual(body.missingClients, []);
       assert.equal("supportedAgents" in body, false);
       assert.equal("availableAgents" in body, false);
       assert.deepEqual(body.availableRoles, ["quick", "deep", "visual"]);
@@ -2133,11 +2142,31 @@ describe("oma CLI", () => {
         codex: "deep",
         claude: "deep",
         gemini: "visual",
+        cursor: "visual",
+        copilot: "deep",
+        opencode: "deep",
+        hermes: "deep",
+        qodercli: "quick",
       });
       assert.deepEqual(body.recommendedApprovalCommands, {
         codex: "oma acpx approve --agent codex --role deep --permissions edit --scope project",
         claude: "oma acpx approve --agent claude --role deep --permissions edit --scope project",
         gemini: "oma acpx approve --agent gemini --role visual --permissions edit --scope project",
+        cursor: "oma acpx approve --agent cursor --role visual --permissions edit --scope project",
+        copilot: "oma acpx approve --agent copilot --role deep --permissions edit --scope project",
+        opencode: "oma acpx approve --agent opencode --role deep --permissions edit --scope project",
+        hermes: "oma acpx approve --agent hermes --role deep --permissions edit --scope project",
+        qodercli: "oma acpx approve --agent qodercli --role quick --permissions edit --scope project",
+      });
+      assert.deepEqual(body.recommendedInstalledApprovalCommands, {
+        codex: "oma acpx approve --agent codex --role deep --permissions edit --scope project",
+        claude: "oma acpx approve --agent claude --role deep --permissions edit --scope project",
+        gemini: "oma acpx approve --agent gemini --role visual --permissions edit --scope project",
+        cursor: "oma acpx approve --agent cursor --role visual --permissions edit --scope project",
+        copilot: "oma acpx approve --agent copilot --role deep --permissions edit --scope project",
+        opencode: "oma acpx approve --agent opencode --role deep --permissions edit --scope project",
+        hermes: "oma acpx approve --agent hermes --role deep --permissions edit --scope project",
+        qodercli: "oma acpx approve --agent qodercli --role quick --permissions edit --scope project",
       });
       assert.equal(body.recommendedApprovalCommand, "oma acpx approve --agent codex --role deep --permissions edit --scope project");
       assert.match(String(body.summary), /declared ACPX adapters/i);
@@ -2145,6 +2174,12 @@ describe("oma CLI", () => {
       assert.equal(existsSync(join(process.env.OMA_HOME, "config/agents.json")), false);
     } finally {
       process.chdir(previousCwd);
+      if (previousPath === undefined) {
+        delete process.env.PATH;
+      } else {
+        process.env.PATH = previousPath;
+      }
+      rmSync(binDir, { recursive: true, force: true });
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -2152,7 +2187,9 @@ describe("oma CLI", () => {
   test("acpx init recommends a discovered non-codex adapter when codex is absent", async () => {
     const dir = mkdtempSync(join(tmpdir(), "oma-acpx-init-no-codex-"));
     const previousCwd = process.cwd();
+    const previousPath = process.env.PATH;
     try {
+      process.env.PATH = "";
       process.chdir(dir);
       const result = await runCli(["acpx", "init"], {
         executeCommand: async () => ({
@@ -2168,6 +2205,11 @@ describe("oma CLI", () => {
       assert.equal(body.recommendedApprovalCommand, "oma acpx approve --agent claude --role deep --permissions edit --scope project");
     } finally {
       process.chdir(previousCwd);
+      if (previousPath === undefined) {
+        delete process.env.PATH;
+      } else {
+        process.env.PATH = previousPath;
+      }
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -2175,7 +2217,9 @@ describe("oma CLI", () => {
   test("acpx init parses declared adapters from stderr help output", async () => {
     const dir = mkdtempSync(join(tmpdir(), "oma-acpx-init-stderr-"));
     const previousCwd = process.cwd();
+    const previousPath = process.env.PATH;
     try {
+      process.env.PATH = "";
       process.chdir(dir);
       const result = await runCli(["acpx", "init"], {
         executeCommand: async () => ({
@@ -2195,63 +2239,93 @@ describe("oma CLI", () => {
       assert.equal(body.recommendedApprovalCommand, "oma acpx approve --agent gemini --role visual --permissions edit --scope project");
     } finally {
       process.chdir(previousCwd);
+      if (previousPath === undefined) {
+        delete process.env.PATH;
+      } else {
+        process.env.PATH = previousPath;
+      }
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  test("install can inspect declared ACPX adapters and report per-agent role recommendations", async () => {
+  test("install can inspect declared ACPX adapters, installed clients, and per-agent role recommendations", async () => {
     const calls: Array<{ command: string; args: string[] }> = [];
+    const previousPath = process.env.PATH;
+    const binDir = mkdtempSync(join(tmpdir(), "oma-client-bin-"));
 
-    const result = await runCli(["install", "--inspect-agents"], {
-      executeCommand: async (command, args) => {
-        calls.push({ command, args });
-        if (command === "acpx" && args[0] === "--version") {
-          return { exitCode: 0, stdout: "0.8.0\n", stderr: "" };
-        }
-        if (command === "acpx" && args[0] === "--help") {
-          return {
-            exitCode: 0,
-            stdout:
-              "Commands:\n  claude [options] [prompt...]                Use claude agent\n  gemini [options] [prompt...]                Use gemini agent\n",
-            stderr: "",
-          };
-        }
-        return { exitCode: 0, stdout: "", stderr: "" };
-      },
-    });
-    const body = bodyAsRecord(result.body);
+    try {
+      writeFileSync(join(binDir, "claude"), "#!/bin/sh\n");
+      writeFileSync(join(binDir, "gemini"), "#!/bin/sh\n");
+      chmodSync(join(binDir, "claude"), 0o755);
+      chmodSync(join(binDir, "gemini"), 0o755);
+      process.env.PATH = binDir;
 
-    assert.equal(result.exitCode, 0);
-    assert.deepEqual(
-      calls.map(({ command, args }) => ({ command, args })),
-      [
-        {
-          command: "npx",
-          args: ["skills", "add", skillsPath(), "--global", "--all", "--full-depth"],
+      const result = await runCli(["install", "--inspect-agents"], {
+        executeCommand: async (command, args) => {
+          calls.push({ command, args });
+          if (command === "acpx" && args[0] === "--version") {
+            return { exitCode: 0, stdout: "0.8.0\n", stderr: "" };
+          }
+          if (command === "acpx" && args[0] === "--help") {
+            return {
+              exitCode: 0,
+              stdout:
+                "Commands:\n  claude [options] [prompt...]                Use claude agent\n  gemini [options] [prompt...]                Use gemini agent\n  qwen [options] [prompt...]                Use qwen agent\n",
+              stderr: "",
+            };
+          }
+          return { exitCode: 0, stdout: "", stderr: "" };
         },
-        {
-          command: "acpx",
-          args: ["--version"],
+      });
+      const body = bodyAsRecord(result.body);
+
+      assert.equal(result.exitCode, 0);
+      assert.deepEqual(
+        calls.map(({ command, args }) => ({ command, args })),
+        [
+          {
+            command: "npx",
+            args: ["skills", "add", skillsPath(), "--global", "--all", "--full-depth"],
+          },
+          {
+            command: "acpx",
+            args: ["--version"],
+          },
+          {
+            command: "acpx",
+            args: ["--help"],
+          },
+        ],
+      );
+      assert.deepEqual(body.agentDiscovery, {
+        status: "AGENT_DISCOVERY_READY",
+        declaredAdapters: ["claude", "gemini", "qwen"],
+        installedClients: ["claude", "gemini"],
+        missingClients: ["qwen"],
+        recommendedRoles: {
+          claude: "deep",
+          gemini: "visual",
+          qwen: "quick",
         },
-        {
-          command: "acpx",
-          args: ["--help"],
+        recommendedApprovalCommands: {
+          claude: "oma acpx approve --agent claude --role deep --permissions edit --scope project",
+          gemini: "oma acpx approve --agent gemini --role visual --permissions edit --scope project",
+          qwen: "oma acpx approve --agent qwen --role quick --permissions edit --scope project",
         },
-      ],
-    );
-    assert.deepEqual(body.agentDiscovery, {
-      status: "AGENT_DISCOVERY_READY",
-      declaredAdapters: ["claude", "gemini"],
-      recommendedRoles: {
-        claude: "deep",
-        gemini: "visual",
-      },
-      recommendedApprovalCommands: {
-        claude: "oma acpx approve --agent claude --role deep --permissions edit --scope project",
-        gemini: "oma acpx approve --agent gemini --role visual --permissions edit --scope project",
-      },
-      summary: "Declared ACPX adapters discovered. These are candidates only until the user confirms they are configured and approves them for OMA.",
-    });
+        recommendedInstalledApprovalCommands: {
+          claude: "oma acpx approve --agent claude --role deep --permissions edit --scope project",
+          gemini: "oma acpx approve --agent gemini --role visual --permissions edit --scope project",
+        },
+        summary: "Declared ACPX adapters discovered and local client commands inspected. These are candidates only until the user confirms they are configured and approves them for OMA.",
+      });
+    } finally {
+      if (previousPath === undefined) {
+        delete process.env.PATH;
+      } else {
+        process.env.PATH = previousPath;
+      }
+      rmSync(binDir, { recursive: true, force: true });
+    }
   });
 
   test("acpx init reports structured discovery failure when acpx help fails", async () => {
@@ -2401,6 +2475,8 @@ describe("oma CLI", () => {
     assert.match(skill, /Approved Agent role/i);
     assert.match(skill, /summarize the current approval state/i);
     assert.match(skill, /current optional choices/i);
+    assert.match(skill, /claude -> deep/);
+    assert.match(skill, /gemini -> visual/);
     assert.match(skill, /visual/);
     assert.match(skill, /deep/);
     assert.match(skill, /quick/);
@@ -2448,6 +2524,12 @@ describe("oma CLI", () => {
     assert.match(skill, /current configuration/i);
     assert.match(skill, /available choices/i);
     assert.match(skill, /Declared ACPX adapters/i);
+    assert.match(skill, /installedClients/);
+    assert.match(skill, /choose one or more client names from `installedClients`/i);
+    assert.match(skill, /recommendedInstalledApprovalCommands/);
+    assert.match(skill, /Interactive prompt/i);
+    assert.match(skill, /one role per approved agent/i);
+    assert.match(skill, /gemini.*visual/i);
     assert.doesNotMatch(skill, /Supported agents:/i);
     assert.match(skill, /Roles/i);
     assert.match(skill, /Permissions/i);

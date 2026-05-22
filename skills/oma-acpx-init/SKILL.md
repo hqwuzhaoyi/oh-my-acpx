@@ -32,13 +32,15 @@ Do not use this skill for fake/local routes, schema checks, or normal proposal-o
    - Configured Agent: present in ACPX configuration.
    - Verified Agent: passed a smoke check in this environment.
    - Approved Agent: explicitly allowed by the user for OMA auxiliary task roles.
-5. Run `oma acpx init` to discover Declared ACPX adapters or report existing approvals. This command must not prompt.
+5. Run `oma acpx init` to discover Declared ACPX adapters, inspect locally installed client commands, or report existing approvals. This command must not prompt.
 6. Show available choices before recommending a command:
-   - Declared ACPX adapters: candidate names returned by `oma acpx init`; these are not necessarily user-usable.
+   - Installed client commands from `installedClients`: terminal clients found on PATH, such as `codex`, `claude`, `gemini`, `cursor`, `copilot`, `opencode`, `hermes`, and `qodercli`.
+   - Recommended commands from `recommendedInstalledApprovalCommands`: one approval command per installed client, each with its own recommended role.
+   - Declared ACPX adapters: adapter names returned by `oma acpx init`; these are not necessarily installed or user-usable.
    - Roles: `quick`, `deep`, `visual`.
    - Permissions: `read`, `edit`.
    - Scope: `project`, `global`.
-7. Ask the user which candidate adapters are configured and usable in this environment, then which of those to approve. Recommend one role per approved agent, not one global role for every selected agent, and confirm edit/read permissions and project/global scope.
+7. Ask the user which installed clients are configured and usable in this environment, then which of those to approve. Recommend one role per approved agent from `recommendedInstalledApprovalCommands`, not one global role for every selected agent, and confirm edit/read permissions and project/global scope.
 8. Run `oma acpx approve --agent <name> --role <role> --permissions <read|edit> --scope <project|global>` for each approved agent.
 9. Confirm that `.oma/config/agents.json` or `~/.oma/config/agents.json` was written.
 10. If the original task was blocked, retry `oma run <plan-path> --execute`.
@@ -48,15 +50,17 @@ Do not use this skill for fake/local routes, schema checks, or normal proposal-o
 Use concise questions. The user should not need to understand internal routing fields.
 
 - First show the current configuration and available choices.
-- Include Declared ACPX adapter names, role options, permission options, and scope options.
-- State that Declared ACPX adapters are only candidates, not proof of user access.
-- If there is only one candidate adapter, ask whether it is configured and usable before asking whether to approve it.
-- If there are multiple, ask the user to choose one or more agent names.
+- Include installed client command names, Declared ACPX adapter names, role options, permission options, and scope options.
+- State that Declared ACPX adapters and installed client commands are only candidates, not proof of user access.
+- If there is only one installed client, ask whether it is configured and usable before asking whether to approve it.
+- If there are multiple installed clients, ask the user to choose one or more client names from `installedClients`.
+- Include Declared ACPX adapters as secondary candidates only when the user says an adapter is usable despite no matching installed client command.
 - Recommend one role per selected agent: `quick`, `deep`, or `visual`. Do not flatten all selected agents to a single shared role.
+- Prefer `recommendedInstalledApprovalCommands` when showing default approval commands. Fall back to `recommendedApprovalCommands` only for secondary Declared ACPX adapter candidates.
 - Ask once whether selected agents may edit files. Default is edit.
 - Ask whether approval should be project-only or global. Default is project unless the user explicitly wants the same approval across projects.
 
-Example:
+Interactive prompt example:
 
 ```text
 Current configuration:
@@ -65,13 +69,24 @@ Current configuration:
 - Approved Agents: none
 
 Available choices:
+- Installed client commands: codex, claude, gemini, cursor, copilot, opencode, hermes, qodercli
 - Declared ACPX adapters: codex, claude, gemini, cursor, qwen, kimi, iflow, droid, pi, qoder
 - Roles: quick, deep, visual
 - Permissions: read, edit
 - Scope: project, global
 
-These adapter names are candidates only; they do not prove user access.
-Which adapters are configured and usable here, and which roles, permissions, and scope should OMA approve for Auxiliary Tasks?
+Recommended installed-client approvals:
+- codex -> deep: oma acpx approve --agent codex --role deep --permissions edit --scope project
+- claude -> deep: oma acpx approve --agent claude --role deep --permissions edit --scope project
+- gemini -> visual: oma acpx approve --agent gemini --role visual --permissions edit --scope project
+- cursor -> visual: oma acpx approve --agent cursor --role visual --permissions edit --scope project
+- copilot -> deep: oma acpx approve --agent copilot --role deep --permissions edit --scope project
+- opencode -> deep: oma acpx approve --agent opencode --role deep --permissions edit --scope project
+- hermes -> deep: oma acpx approve --agent hermes --role deep --permissions edit --scope project
+- qodercli -> quick: oma acpx approve --agent qodercli --role quick --permissions edit --scope project
+
+These installed client commands and adapter names are candidates only; they do not prove user access.
+Which installed clients are configured and usable here, and which roles, permissions, and scope should OMA approve for Auxiliary Tasks?
 ```
 
 After the user approves, write the approval through the non-interactive CLI:
@@ -90,8 +105,8 @@ Role meanings:
 Default recommendations:
 
 - `cursor`, `gemini` -> `visual`
-- `pi`, `qwen`, `kimi`, `iflow` -> `quick`
-- `claude`, `codex`, `droid`, and unknown agents -> `deep`
+- `pi`, `qwen`, `kimi`, `iflow`, `qodercli` -> `quick`
+- `claude`, `codex`, `copilot`, `opencode`, `hermes`, `droid`, and unknown agents -> `deep`
 
 Permissions:
 

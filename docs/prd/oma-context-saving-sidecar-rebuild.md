@@ -379,6 +379,7 @@ Installs or updates OMA-provided skills into the user's agent skill registry.
 Expected behavior:
 
 - Install **OMA Skills** such as the OMA orchestration entrypoint and `oma acpx init` onboarding skill.
+- Optionally inspect declared ACPX adapters and locally installed client commands with `oma install --inspect-agents`; report per-agent role recommendations while keeping discovery candidate-only and never approving agents.
 - Avoid reading or modifying any **Offload Plan**.
 - Avoid spawning ACPX.
 - Avoid implying Host Plan ownership.

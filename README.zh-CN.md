@@ -51,6 +51,14 @@ npx skills add <oh-my-acpx>/skills --global --all --full-depth
 
 它还会检查 `acpx` 是否可用；如果命令不存在，交互式终端会询问是否运行 `npm install -g acpx`，非交互式运行会跳过 ACPX 安装，除非传入 `--yes`。这个命令不支持只安装单个 skill。
 
+如果想在安装时顺便查看当前声明的 ACPX adapters 和本机 PATH 上已安装的客户端命令，可以运行：
+
+```bash
+oma install --inspect-agents
+```
+
+发现结果会列出候选 adapter、已安装客户端命令（例如 `codex`、`claude`、`gemini`、`cursor`、`copilot`、`opencode`、`hermes`、`qodercli`），并按每个 agent 给出推荐角色，例如 `claude -> deep`、`gemini -> visual`。这些仍然只是候选项；需要用户确认它们已配置可用，再用 `oma acpx approve` 显式批准。
+
 ### 源码安装
 
 ```bash
@@ -112,6 +120,7 @@ OMA **不会** 替代你的 agent。
 oma setup
 oma acpx init
 oma acpx approve --agent codex --role deep --permissions edit --scope project
+oma acpx approve --agent gemini --role visual --permissions edit --scope project
 oma run .oma/plans/plan.json
 oma run .oma/plans/plan.json --execute
 oma result show <task-id>
