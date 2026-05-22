@@ -123,6 +123,8 @@ oma acpx approve --agent codex --role deep --permissions edit --scope project
 oma acpx approve --agent gemini --role visual --permissions edit --scope project
 oma run .oma/plans/plan.json
 oma run .oma/plans/plan.json --execute
+oma run .oma/plans/plan.json --tasks docs-check,api-check
+oma run .oma/plans/plan.json --execute --tasks docs-check,api-check --parallel 2
 oma result show <task-id>
 oma schema
 ```
@@ -131,7 +133,10 @@ Key boundaries:
 
 - `oma run` returns an Offload Proposal by default and does not call ACPX.
 - `oma run --execute` is explicit Execute Mode.
+- `oma run --tasks a,b` returns an Offload Batch Proposal for Host-selected tasks.
+- `oma run --execute --tasks a,b --parallel N` explicitly executes a Host-selected batch; per-task artifacts are still written separately, and the batch artifact is written under `.oma/artifacts/batches/`.
 - ACPX-backed execution requires Approved Agents.
+- ACPX-backed tasks default to a 600 second prompt timeout unless `route.timeoutSeconds` is set.
 - `oma result show <task-id>` inspects captured Auxiliary Task results.
 - `oma schema` exposes the runtime return contract for operators and tests.
 
