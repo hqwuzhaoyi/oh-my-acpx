@@ -105,6 +105,33 @@ export interface OffloadProposal {
   };
 }
 
+export interface OffloadBatchProposal {
+  kind: "Offload Batch Proposal";
+  status: "OFFLOAD_BATCH_READY";
+  executeMode: false;
+  planObjective: string;
+  requestedTaskIds: string[];
+  parallelism: number;
+  tasks: Array<{
+    id: string;
+    title: string;
+    status: AuxiliaryTaskStatus;
+    contextBudget: ContextBudget;
+    selectedRoute: OffloadRoute;
+    payload: {
+      prompt: string;
+      taskId: string;
+      mode: "proposal";
+    };
+  }>;
+  expectedReturnSchema: AuxiliaryTaskReturnSchema;
+  warnings: string[];
+  coordinationAdvice: {
+    recommendedAction: "execute" | "revise" | "fallback_to_host";
+    reason: string;
+  };
+}
+
 export interface Evidence {
   kind: "note" | "artifact" | "command" | "file";
   summary: string;
@@ -128,6 +155,32 @@ export interface AuxiliaryTaskReturn {
   blockers: string[];
   findings: string[];
   followups: string[];
+  coordinationAdvice: {
+    recommendedAction: "accept" | "retry" | "ask_user" | "spawn_followup" | "fallback_to_host";
+    reason: string;
+  };
+}
+
+export interface AuxiliaryTaskBatchReturn {
+  kind: "Auxiliary Task Batch Return";
+  status: "completed" | "partial" | "failed";
+  hostPlanComplete: false;
+  batchRunId: string;
+  requestedTaskIds: string[];
+  parallelism: number;
+  artifactRef: string;
+  results: Array<{
+    auxiliaryTaskId: string;
+    status: AuxiliaryTaskReturn["status"];
+    verdict: AuxiliaryTaskReturn["verdict"];
+    summary: string;
+    artifact: string;
+    coordinationAdvice: AuxiliaryTaskReturn["coordinationAdvice"];
+    blockers: string[];
+    return?: AuxiliaryTaskReturn;
+  }>;
+  warnings: string[];
+  blockers: string[];
   coordinationAdvice: {
     recommendedAction: "accept" | "retry" | "ask_user" | "spawn_followup" | "fallback_to_host";
     reason: string;

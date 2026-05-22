@@ -452,6 +452,113 @@ describe("oma CLI", () => {
     }
   });
 
+  test("run --tasks returns a batch proposal without executing files", async () => {
+    const { dir, path } = tempPlan(samplePlanWithTwoLocalOutputTasks());
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(dir);
+      const result = await runCli(["run", path, "--tasks", "first-output,second-output"]);
+      const body = bodyAsRecord(result.body);
+
+      assert.equal(result.exitCode, 0);
+      assert.equal(body.kind, "Offload Batch Proposal");
+      assert.equal(body.status, "OFFLOAD_BATCH_READY");
+      assert.equal(body.executeMode, false);
+      assert.equal(body.parallelism, 2);
+      assert.deepEqual(body.requestedTaskIds, ["first-output", "second-output"]);
+      assert.deepEqual(body.tasks.map((task: Record<string, any>) => task.id), ["first-output", "second-output"]);
+      assert.equal(existsSync(join(dir, "demo/first.txt")), false);
+      assert.equal(existsSync(join(dir, "demo/second.txt")), false);
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("run --execute --tasks runs a batch, writes artifacts, and marks accepted tasks completed", async () => {
+    const { dir, path } = tempPlan(samplePlanWithTwoLocalOutputTasks());
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(dir);
+      const result = await runCli(["run", path, "--execute", "--tasks", "first-output,second-output"]);
+      const body = bodyAsRecord(result.body);
+
+      assert.equal(result.exitCode, 0);
+      assert.equal(body.kind, "Auxiliary Task Batch Return");
+      assert.equal(body.status, "completed");
+      assert.equal(body.hostPlanComplete, false);
+      assert.deepEqual(body.requestedTaskIds, ["first-output", "second-output"]);
+      assert.deepEqual(body.results.map((item: Record<string, any>) => item.auxiliaryTaskId), [
+        "first-output",
+        "second-output",
+      ]);
+      assert.equal(body.results[0].return, undefined);
+      assert.equal(readFileSync(join(dir, "demo/first.txt"), "utf8"), "first\n");
+      assert.equal(readFileSync(join(dir, "demo/second.txt"), "utf8"), "second\n");
+      assert.equal(existsSync(join(dir, ".oma/artifacts/first-output.json")), true);
+      assert.equal(existsSync(join(dir, ".oma/artifacts/second-output.json")), true);
+      assert.equal(existsSync(join(dir, body.artifactRef)), true);
+
+      const updatedPlan = JSON.parse(readFileSync(path, "utf8")) as OffloadPlan;
+      assert.deepEqual(updatedPlan.tasks.map((task) => task.status), ["completed", "completed"]);
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("run --execute --tasks --full includes full task returns", async () => {
+    const { dir, path } = tempPlan(samplePlanWithTwoLocalOutputTasks());
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(dir);
+      const result = await runCli(["run", path, "--execute", "--tasks=first-output,second-output", "--full"]);
+      const body = bodyAsRecord(result.body);
+
+      assert.equal(result.exitCode, 0);
+      assert.equal(body.kind, "Auxiliary Task Batch Return");
+      assert.equal(body.results[0].return.kind, "Auxiliary Task Return");
+      assert.equal(body.results[1].return.auxiliaryTaskId, "second-output");
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("run --tasks rejects invalid batch input before execution", async () => {
+    const { dir, path } = tempPlan(samplePlanWithTwoLocalOutputTasks());
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(dir);
+      const result = await runCli(["run", path, "--execute", "--tasks", "first-output,first-output"]);
+      const body = bodyAsRecord(result.body);
+
+      assert.equal(result.exitCode, 1);
+      assert.equal(body.status, "INVALID_BATCH_REQUEST");
+      assert.match(body.errors.join("\n"), /Duplicate task id/);
+      assert.equal(existsSync(join(dir, "demo/first.txt")), false);
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("run --tasks rejects duplicate local output paths", async () => {
+    const plan = samplePlanWithTwoLocalOutputTasks();
+    plan.tasks[1].localOutputs = [{ path: "demo/first.txt", content: "second\n" }];
+    const { dir, path } = tempPlan(plan);
+    try {
+      const result = await runCli(["run", path, "--execute", "--tasks", "first-output,second-output"]);
+      const body = bodyAsRecord(result.body);
+
+      assert.equal(result.exitCode, 1);
+      assert.equal(body.status, "INVALID_BATCH_REQUEST");
+      assert.match(body.errors.join("\n"), /both declare local output/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("run --execute allows local output paths with parent-like filename prefixes", async () => {
     const plan = samplePlan();
     plan.tasks[0].localOutputs = [{ path: "..foo/out.txt", content: "inside\n" }];
@@ -664,7 +771,7 @@ describe("oma CLI", () => {
         process.cwd(),
         "--approve-all",
         "--timeout",
-        "180",
+        "600",
         "codex",
         "-s",
         sessionName,

@@ -123,6 +123,8 @@ oma acpx approve --agent codex --role deep --permissions edit --scope project
 oma acpx approve --agent gemini --role visual --permissions edit --scope project
 oma run .oma/plans/plan.json
 oma run .oma/plans/plan.json --execute
+oma run .oma/plans/plan.json --tasks docs-check,api-check
+oma run .oma/plans/plan.json --execute --tasks docs-check,api-check --parallel 2
 oma result show <task-id>
 oma schema
 ```
@@ -131,7 +133,10 @@ oma schema
 
 - `oma run` 默认返回 Offload Proposal，不会调用 ACPX。
 - `oma run --execute` 是显式 Execute Mode。
+- `oma run --tasks a,b` 会为 Host Agent 选定的 tasks 返回 Offload Batch Proposal。
+- `oma run --execute --tasks a,b --parallel N` 会显式执行 Host Agent 选定的 batch；每个 task 仍单独写 artifact，batch artifact 写到 `.oma/artifacts/batches/` 下。
 - ACPX-backed execution 需要 Approved Agents。
+- ACPX-backed task 默认 prompt timeout 是 600 秒，除非设置了 `route.timeoutSeconds`。
 - `oma result show <task-id>` 用于查看已捕获的 Auxiliary Task 结果。
 - `oma schema` 暴露 runtime return contract，供 operators 和 tests 使用。
 

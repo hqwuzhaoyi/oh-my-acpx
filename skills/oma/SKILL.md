@@ -56,6 +56,8 @@ oma acpx approve --agent codex --role deep --permissions edit --scope project
 oma acpx approve --agent gemini --role visual --permissions edit --scope project
 oma run .oma/plans/plan.json
 oma run .oma/plans/plan.json --execute
+oma run .oma/plans/plan.json --tasks docs-check,api-check
+oma run .oma/plans/plan.json --execute --tasks docs-check,api-check --parallel 2
 oma result show <task-id>
 oma schema
 ```
@@ -89,6 +91,19 @@ Expected behavior:
 If no plan exists, treat `NO_PLAN` as a safe stop and create or pass an **Offload Plan**.
 
 If all tasks are done, treat `ALL_DONE` as "no auxiliary work remains"; do not claim the **Host Plan** is complete.
+
+### `oma run <plan-path> --tasks <task-id,task-id>`
+
+Run only when the **Host Agent** has explicitly decided which pending **Auxiliary Tasks** are safe to consider as one batch.
+
+Expected behavior:
+
+- Returns an **Offload Batch Proposal**
+- Does not infer task independence
+- Preserves the task order from `--tasks`
+- Defaults parallelism to the number of selected tasks, capped at 4
+- Does not enter **Execute Mode**
+- Does not call ACPX
 
 ### `oma acpx init`
 
@@ -127,6 +142,23 @@ Expected behavior in this MVP:
 - Keeps `status` separate from `verdict`
 - Keeps `hostPlanComplete` false
 
+### `oma run <plan-path> --execute --tasks <task-id,task-id> [--parallel N] [--full]`
+
+Run only after the **Host Agent** has inspected and accepted the **Offload Batch Proposal**.
+
+Expected behavior:
+
+- Executes only the Host-selected pending tasks
+- Uses `--parallel N` as the concurrency cap; without it, defaults to selected task count capped at 4
+- Does not fail fast; all selected tasks run unless the batch request itself is invalid
+- Writes one artifact per task under `.oma/artifacts/<task-id>.json`
+- Writes the batch artifact under `.oma/artifacts/batches/<batchRunId>.json`
+- Returns a lightweight **Auxiliary Task Batch Return** by default
+- Includes full per-task **Auxiliary Task Return** objects only when `--full` is passed
+- Marks each task completed independently using the normal `completed` + `provisional_accept` + `accept` rule
+- Rejects duplicate `localOutputs.path` conflicts before execution
+- Reports `modifiedFiles` / `readFiles` overlaps as warnings, not scheduling decisions
+
 ### `oma result show <task-id>`
 
 Use this after Execute Mode when the **Host Agent** needs the complete captured answer without manually browsing `.oma/artifacts/`.
@@ -153,7 +185,7 @@ Rules:
 - Do not use `exec` for OMA **Auxiliary Tasks**. `exec` is a one-shot temporary ACP session and does not preserve persistent session state.
 - Create a named ACPX session before sending the prompt.
 - Use `route.sessionName` as the session-name prefix; OMA appends the current `runId` so each execution gets a fresh observable session instead of inheriting stale assistant context.
-- Use `route.timeoutSeconds` when provided; otherwise OMA uses the default ACPX prompt timeout of 180 seconds.
+- Use `route.timeoutSeconds` when provided; otherwise OMA uses the default ACPX prompt timeout of 600 seconds.
 - Send the task prompt through `-s <session-name>` or `--session <session-name>`.
 - After execution, collect `sessions show <session-name>` and `sessions history <session-name>` output when available.
 - Write `sessionName`, session metadata, history summary, command evidence, stdout, and stderr into `.oma/artifacts/<task-id>.json`.
@@ -164,7 +196,7 @@ Expected command shape:
 
 ```bash
 acpx --cwd <workspace> <agent> sessions ensure --name <session-name>-<runId>
-acpx --cwd <workspace> --approve-all --timeout <route.timeoutSeconds-or-180> <agent> -s <session-name>-<runId> "<prompt>"
+acpx --cwd <workspace> --approve-all --timeout <route.timeoutSeconds-or-600> <agent> -s <session-name>-<runId> "<prompt>"
 acpx --cwd <workspace> <agent> sessions show <session-name>-<runId>
 acpx --cwd <workspace> <agent> sessions history <session-name>-<runId> --limit 20
 ```

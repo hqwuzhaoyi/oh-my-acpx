@@ -7,9 +7,12 @@ import { createInterface } from "node:readline/promises";
 
 import {
   type ApprovedAgentConfig,
+  type AuxiliaryTask,
+  type AuxiliaryTaskBatchReturn,
   type AuxiliaryTaskReturn,
   DEFAULT_OFFLOAD_PLAN_PATH,
   buildAuxiliaryTaskReturn,
+  buildOffloadBatchProposal,
   buildOffloadProposal,
   captureExtractedAuxiliaryFindings,
   captureMismatchedAuxiliaryReturns,
@@ -47,6 +50,8 @@ export interface CliOptions {
 }
 
 const KNOWN_LOCAL_CLIENTS = ["codex", "claude", "gemini", "cursor", "copilot", "opencode", "hermes", "qodercli"];
+const DEFAULT_ACPX_TIMEOUT_SECONDS = 600;
+const DEFAULT_BATCH_PARALLELISM_LIMIT = 4;
 
 export async function runCli(args: string[], options: CliOptions = {}): Promise<CliResult> {
   const [command, ...rest] = args;
@@ -56,7 +61,8 @@ export async function runCli(args: string[], options: CliOptions = {}): Promise<
       exitCode: 0,
       body: {
         status: "HELP",
-        summary: "Supported commands: acpx, setup, install, result, run, schema. Use oma acpx init before ACPX Execute Mode.",
+        summary:
+          "Supported commands: acpx, setup, install, result, run, schema. Use oma run --tasks for Host-selected batches and oma acpx init before ACPX Execute Mode.",
       },
     };
   }
@@ -676,12 +682,127 @@ function setupCommand(): CliResult {
   };
 }
 
+interface RunOptions {
+  executeMode: boolean;
+  full: boolean;
+  planPath: string;
+  taskIds?: string[];
+  parallelism?: number;
+}
+
+type ParsedRunOptions =
+  | { ok: true; options: RunOptions }
+  | { ok: false; errors: string[] };
+
+function parseRunOptions(args: string[]): ParsedRunOptions {
+  const errors: string[] = [];
+  let executeMode = false;
+  let full = false;
+  let planPath: string | undefined;
+  let taskIds: string[] | undefined;
+  let parallelism: number | undefined;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--execute") {
+      executeMode = true;
+    } else if (arg === "--full") {
+      full = true;
+    } else if (arg === "--tasks") {
+      taskIds = parseTaskIds(args[index + 1], errors);
+      index += 1;
+    } else if (arg.startsWith("--tasks=")) {
+      taskIds = parseTaskIds(arg.slice("--tasks=".length), errors);
+    } else if (arg === "--parallel") {
+      parallelism = parseParallelism(args[index + 1], errors);
+      index += 1;
+    } else if (arg.startsWith("--parallel=")) {
+      parallelism = parseParallelism(arg.slice("--parallel=".length), errors);
+    } else if (arg.startsWith("--")) {
+      errors.push(`Unknown run option: ${arg}`);
+    } else if (!planPath) {
+      planPath = arg;
+    } else {
+      errors.push(`Unexpected positional argument: ${arg}`);
+    }
+  }
+
+  if (parallelism !== undefined && !taskIds) {
+    errors.push("--parallel requires --tasks.");
+  }
+  if (taskIds && parallelism === undefined) {
+    parallelism = Math.min(taskIds.length, DEFAULT_BATCH_PARALLELISM_LIMIT);
+  }
+
+  if (errors.length > 0) {
+    return { ok: false, errors };
+  }
+
+  return {
+    ok: true,
+    options: {
+      executeMode,
+      full,
+      planPath: planPath ?? DEFAULT_OFFLOAD_PLAN_PATH,
+      taskIds,
+      parallelism,
+    },
+  };
+}
+
+function parseTaskIds(value: string | undefined, errors: string[]): string[] {
+  if (!value || value.startsWith("--")) {
+    errors.push("--tasks requires a comma-separated task id list.");
+    return [];
+  }
+  const taskIds = value.split(",").map((taskId) => taskId.trim()).filter(Boolean);
+  if (taskIds.length === 0) {
+    errors.push("--tasks requires at least one task id.");
+  }
+  const seen = new Set<string>();
+  for (const taskId of taskIds) {
+    if (seen.has(taskId)) {
+      errors.push(`Duplicate task id in --tasks: ${taskId}`);
+    }
+    seen.add(taskId);
+  }
+  return taskIds;
+}
+
+function parseParallelism(value: string | undefined, errors: string[]): number | undefined {
+  if (!value || value.startsWith("--")) {
+    errors.push("--parallel requires a positive integer.");
+    return undefined;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    errors.push("--parallel must be a positive integer.");
+    return undefined;
+  }
+  return parsed;
+}
+
+function invalidBatchRequest(errors: string[]): CliResult {
+  return {
+    exitCode: 1,
+    body: {
+      status: "INVALID_BATCH_REQUEST",
+      summary: "The requested OMA batch is invalid.",
+      errors,
+    },
+  };
+}
+
 async function runCommand(
   args: string[],
   execute: (command: string, args: string[], env: NodeJS.ProcessEnv) => Promise<CommandResult>,
 ): Promise<CliResult> {
-  const executeMode = args.includes("--execute");
-  const planPath = args.find((arg) => !arg.startsWith("--")) ?? DEFAULT_OFFLOAD_PLAN_PATH;
+  const parsed = parseRunOptions(args);
+  if (!parsed.ok) {
+    return invalidBatchRequest(parsed.errors);
+  }
+  const executeMode = parsed.options.executeMode;
+  const planPath = parsed.options.planPath;
   const loaded = loadOffloadPlan(planPath);
 
   if (loaded.status !== "PLAN_LOADED") {
@@ -689,6 +810,10 @@ async function runCommand(
       exitCode: loaded.status === "NO_PLAN" ? 2 : 1,
       body: loaded,
     };
+  }
+
+  if (parsed.options.taskIds) {
+    return runBatchCommand(loaded.plan, parsed.options, execute);
   }
 
   const inspection = inspectOffloadPlan(loaded.plan);
@@ -730,33 +855,207 @@ async function runCommand(
     }
   }
 
+  const auxiliaryReturn = await executeAuxiliaryTask(
+    loaded.plan,
+    inspection.task,
+    execute,
+    acpxMatch?.status === "APPROVED_AGENT_MATCH" ? acpxMatch : undefined,
+  );
+  if (shouldMarkTaskCompleted(auxiliaryReturn)) {
+    markTaskCompleted(planPath, loaded.plan, inspection.task.id);
+  }
+
+  return {
+    exitCode: 0,
+    body: auxiliaryReturn,
+  };
+}
+
+type ExecuteCommand = (command: string, args: string[], env: NodeJS.ProcessEnv) => Promise<CommandResult>;
+type ApprovedAgentMatch = Extract<ReturnType<typeof matchApprovedAgent>, { status: "APPROVED_AGENT_MATCH" }>;
+
+async function runBatchCommand(
+  plan: OffloadPlan,
+  options: RunOptions,
+  execute: ExecuteCommand,
+): Promise<CliResult> {
+  const selected = selectBatchTasks(plan, options.taskIds ?? []);
+  if (!selected.ok) {
+    return invalidBatchRequest(selected.errors);
+  }
+
+  const parallelism = options.parallelism ?? Math.min(selected.tasks.length, DEFAULT_BATCH_PARALLELISM_LIMIT);
+  if (!options.executeMode) {
+    return {
+      exitCode: 0,
+      body: buildOffloadBatchProposal(plan, selected.tasks, parallelism, selected.warnings),
+    };
+  }
+
+  const batchRunId = randomUUID();
+  const approvedAgents = selected.tasks.some((task) => task.route.runtime === "acpx")
+    ? loadApprovedAgents()
+    : undefined;
+  const taskReturns = await runWithConcurrency(selected.tasks, parallelism, (task) =>
+    executeBatchTask(plan, task, execute, approvedAgents),
+  );
+  const completedTaskIds = taskReturns.filter(shouldMarkTaskCompleted).map((result) => result.auxiliaryTaskId);
+  if (completedTaskIds.length > 0) {
+    markTasksCompleted(options.planPath, plan, completedTaskIds);
+  }
+
+  const batchReturn = buildBatchReturn({
+    batchRunId,
+    requestedTaskIds: selected.tasks.map((task) => task.id),
+    parallelism,
+    taskReturns,
+    warnings: selected.warnings,
+    full: options.full,
+  });
+  const artifactResult = writeBatchArtifact(batchReturn, taskReturns);
+  if (!artifactResult.ok) {
+    batchReturn.status = batchReturn.status === "completed" ? "partial" : batchReturn.status;
+    batchReturn.blockers.push(`Batch artifact persistence failed for ${artifactResult.path}: ${artifactResult.error}`);
+    batchReturn.coordinationAdvice = {
+      recommendedAction: "retry",
+      reason: "OMA executed the batch but could not persist the batch artifact.",
+    };
+  }
+
+  return {
+    exitCode: 0,
+    body: batchReturn,
+  };
+}
+
+function selectBatchTasks(
+  plan: OffloadPlan,
+  taskIds: string[],
+): { ok: true; tasks: AuxiliaryTask[]; warnings: string[] } | { ok: false; errors: string[] } {
+  const errors: string[] = [];
+  const taskById = new Map(plan.tasks.map((task) => [task.id, task]));
+  const tasks = taskIds.map((taskId) => {
+    const task = taskById.get(taskId);
+    if (!task) {
+      errors.push(`Unknown task id in --tasks: ${taskId}`);
+      return undefined;
+    }
+    if (task.status !== "pending") {
+      errors.push(`Task ${taskId} is ${task.status}; only pending tasks can be batched.`);
+    }
+    return task;
+  }).filter((task): task is AuxiliaryTask => Boolean(task));
+
+  const localOutputOwners = new Map<string, string>();
+  for (const task of tasks) {
+    for (const output of task.localOutputs ?? []) {
+      const outputPath = normalize(output.path);
+      const existingOwner = localOutputOwners.get(outputPath);
+      if (existingOwner) {
+        errors.push(`Tasks ${existingOwner} and ${task.id} both declare local output ${output.path}.`);
+      } else {
+        localOutputOwners.set(outputPath, task.id);
+      }
+    }
+  }
+
+  if (errors.length > 0) {
+    return { ok: false, errors };
+  }
+  return {
+    ok: true,
+    tasks,
+    warnings: buildBatchScopeWarnings(tasks),
+  };
+}
+
+function buildBatchScopeWarnings(tasks: AuxiliaryTask[]): string[] {
+  const warnings: string[] = [];
+  for (const field of ["modifiedFiles", "readFiles"] as const) {
+    const owners = new Map<string, string>();
+    for (const task of tasks) {
+      for (const file of task[field] ?? []) {
+        const normalized = normalize(file);
+        const existingOwner = owners.get(normalized);
+        if (existingOwner && existingOwner !== task.id) {
+          warnings.push(`Batch scope overlap in ${field}: ${file} is declared by ${existingOwner} and ${task.id}.`);
+        } else {
+          owners.set(normalized, task.id);
+        }
+      }
+    }
+  }
+  return warnings;
+}
+
+async function executeBatchTask(
+  plan: OffloadPlan,
+  task: AuxiliaryTask,
+  execute: ExecuteCommand,
+  approvedAgents: ReturnType<typeof loadApprovedAgents> | undefined,
+): Promise<AuxiliaryTaskReturn> {
+  if (task.route.runtime !== "acpx") {
+    return executeAuxiliaryTask(plan, task, execute);
+  }
   const runId = randomUUID();
-  const acpxSessionName = inspection.task.route.runtime === "acpx"
-    ? sessionNameForRun(inspection.task.route.sessionName ?? `oma-${inspection.task.id}`, runId)
+  if (!approvedAgents || approvedAgents.status !== "APPROVED_AGENTS_LOADED") {
+    return persistPreflightFailure(
+      plan,
+      task,
+      runId,
+      approvedAgents?.summary ?? "Real ACPX execution requires Approved Agents.",
+    );
+  }
+  const acpxMatch = matchApprovedAgent(approvedAgents.config, task.route.agent, task.route.role);
+  if (acpxMatch.status !== "APPROVED_AGENT_MATCH") {
+    return persistPreflightFailure(plan, task, runId, acpxMatch.summary);
+  }
+  return executeAuxiliaryTask(plan, task, execute, acpxMatch);
+}
+
+async function executeAuxiliaryTask(
+  plan: OffloadPlan,
+  task: AuxiliaryTask,
+  execute: ExecuteCommand,
+  acpxMatch?: ApprovedAgentMatch,
+): Promise<AuxiliaryTaskReturn> {
+  const runId = randomUUID();
+  const acpxSessionName = task.route.runtime === "acpx"
+    ? sessionNameForRun(task.route.sessionName ?? `oma-${task.id}`, runId)
     : undefined;
   const acpxResult =
-    inspection.task.route.runtime === "acpx" && acpxMatch?.status === "APPROVED_AGENT_MATCH"
+    task.route.runtime === "acpx" && acpxMatch
       ? await runAcpxTask(
-          inspection.task.route.agent,
-          acpxSessionName ?? `oma-${inspection.task.id}`,
-          inspection.task.id,
+          task.route.agent,
+          acpxSessionName ?? `oma-${task.id}`,
+          task.id,
           runId,
-          inspection.task.prompt,
-          inspection.task.localOutputs,
-          inspection.task.route.timeoutSeconds,
+          task.prompt,
+          task.localOutputs,
+          task.route.timeoutSeconds,
           acpxMatch.permissions,
           execute,
         )
       : undefined;
-  const auxiliaryReturn = buildAuxiliaryTaskReturn(loaded.plan, inspection.task, runId);
+  const auxiliaryReturn = buildAuxiliaryTaskReturn(plan, task, runId);
   let capturedAnswer: string | undefined;
+  if (task.route.runtime === "acpx" && !acpxMatch) {
+    auxiliaryReturn.status = "failed";
+    auxiliaryReturn.verdict = "reject";
+    auxiliaryReturn.findings = [];
+    auxiliaryReturn.blockers.push("ACPX route did not have an Approved Agent match.");
+    auxiliaryReturn.coordinationAdvice = {
+      recommendedAction: "fallback_to_host",
+      reason: "OMA could not run an ACPX task without an Approved Agent match.",
+    };
+  }
   if (acpxResult) {
     auxiliaryReturn.summary = "Auxiliary Task completed through ACPX Execute Mode.";
     auxiliaryReturn.evidence = auxiliaryReturn.evidence.map((item) =>
       item.kind === "note"
         ? {
             ...item,
-            summary: `ACPX execution ran the Auxiliary Task through ${inspection.task.route.agent}: ${inspection.task.title}`,
+            summary: `ACPX execution ran the Auxiliary Task through ${task.route.agent}: ${task.title}`,
           }
         : item,
     );
@@ -769,26 +1068,26 @@ async function runCommand(
       auxiliaryReturn.evidence.push({
         kind: "artifact",
         summary: `ACPX sessionName: ${acpxResult.sessionName}`,
-        reference: `.oma/artifacts/${inspection.task.id}.json`,
+        reference: `.oma/artifacts/${task.id}.json`,
       });
     }
     const trustedSessionHistory = acpxResult.sessionHistory?.exitCode === 0
       ? acpxResult.sessionHistory.stdout
       : undefined;
     const captured = captureSchemaConfirmedAuxiliaryReturn({
-      auxiliaryTaskId: inspection.task.id,
+      auxiliaryTaskId: task.id,
       runId,
       sessionHistory: trustedSessionHistory,
       stdout: acpxResult.stdout,
     });
     const mismatchEvidence = captureMismatchedAuxiliaryReturns({
-      auxiliaryTaskId: inspection.task.id,
+      auxiliaryTaskId: task.id,
       runId,
       sessionHistory: trustedSessionHistory,
       stdout: acpxResult.stdout,
     }).map((mismatch) => ({
       kind: "note" as const,
-      summary: `Ignored Auxiliary Task Return for ${mismatch.auxiliaryTaskId}; expected ${inspection.task.id}.`,
+      summary: `Ignored Auxiliary Task Return for ${mismatch.auxiliaryTaskId}; expected ${task.id}.`,
     }));
     const extracted = captured
       ? undefined
@@ -812,40 +1111,38 @@ async function runCommand(
         recommendedAction: "fallback_to_host",
         reason: "ACPX execution failed; the Host Agent should inspect the artifact and decide the next step.",
       };
+    } else if (captured) {
+      const transportEvidence = auxiliaryReturn.evidence;
+      Object.assign(auxiliaryReturn, captured);
+      auxiliaryReturn.evidence = [...captured.evidence, ...transportEvidence, ...mismatchEvidence];
     } else {
-      if (captured) {
-        const transportEvidence = auxiliaryReturn.evidence;
-        Object.assign(auxiliaryReturn, captured);
-        auxiliaryReturn.evidence = [...captured.evidence, ...transportEvidence, ...mismatchEvidence];
+      auxiliaryReturn.evidence.push(...mismatchEvidence);
+      if (extracted) {
+        auxiliaryReturn.findings = extracted.findings;
+        auxiliaryReturn.status = "completed";
+        auxiliaryReturn.verdict = "revise";
+        auxiliaryReturn.summary = "Auxiliary Task completed through ACPX Execute Mode with free-form captured findings.";
+        auxiliaryReturn.followups = ["Review the captured free-form answer before integrating it into the Host Plan."];
+        auxiliaryReturn.coordinationAdvice = {
+          recommendedAction: "retry",
+          reason: "ACPX produced Host-usable free-form content but no schema-confirmed Auxiliary Task Return.",
+        };
       } else {
-        auxiliaryReturn.evidence.push(...mismatchEvidence);
-        if (extracted) {
-          auxiliaryReturn.findings = extracted.findings;
-          auxiliaryReturn.status = "completed";
-          auxiliaryReturn.verdict = "revise";
-          auxiliaryReturn.summary = "Auxiliary Task completed through ACPX Execute Mode with free-form captured findings.";
-          auxiliaryReturn.followups = ["Review the captured free-form answer before integrating it into the Host Plan."];
-          auxiliaryReturn.coordinationAdvice = {
-            recommendedAction: "retry",
-            reason: "ACPX produced Host-usable free-form content but no schema-confirmed Auxiliary Task Return.",
-          };
-        } else {
-          auxiliaryReturn.status = "blocked";
-          auxiliaryReturn.verdict = "revise";
-          auxiliaryReturn.summary = "ACPX Execute Mode completed but OMA could not capture usable auxiliary result content.";
-          auxiliaryReturn.findings = [];
-          auxiliaryReturn.blockers.push("No usable auxiliary result content was captured from ACPX session history or stdout.");
-          auxiliaryReturn.followups = ["Inspect the ACPX session or retry with an explicit Auxiliary Task Return schema request."];
-          auxiliaryReturn.coordinationAdvice = {
-            recommendedAction: "retry",
-            reason: "ACPX transport completed without a schema-confirmed return or usable free-form findings.",
-          };
-        }
+        auxiliaryReturn.status = "blocked";
+        auxiliaryReturn.verdict = "revise";
+        auxiliaryReturn.summary = "ACPX Execute Mode completed but OMA could not capture usable auxiliary result content.";
+        auxiliaryReturn.findings = [];
+        auxiliaryReturn.blockers.push("No usable auxiliary result content was captured from ACPX session history or stdout.");
+        auxiliaryReturn.followups = ["Inspect the ACPX session or retry with an explicit Auxiliary Task Return schema request."];
+        auxiliaryReturn.coordinationAdvice = {
+          recommendedAction: "retry",
+          reason: "ACPX transport completed without a schema-confirmed return or usable free-form findings.",
+        };
       }
     }
   }
-  if (inspection.task.route.runtime !== "acpx") {
-    const localOutputResult = writeLocalOutputs(inspection.task.localOutputs);
+  if (task.route.runtime !== "acpx") {
+    const localOutputResult = writeLocalOutputs(task.localOutputs);
     if (!localOutputResult.ok) {
       auxiliaryReturn.status = "failed";
       auxiliaryReturn.verdict = "reject";
@@ -869,14 +1166,122 @@ async function runCommand(
       reason: "OMA captured auxiliary result content but could not persist the result artifact for later inspection.",
     };
   }
-  if (shouldMarkTaskCompleted(auxiliaryReturn)) {
-    markTaskCompleted(planPath, loaded.plan, inspection.task.id);
-  }
+  return auxiliaryReturn;
+}
 
-  return {
-    exitCode: 0,
-    body: auxiliaryReturn,
+function persistPreflightFailure(
+  plan: OffloadPlan,
+  task: AuxiliaryTask,
+  runId: string,
+  blocker: string,
+): AuxiliaryTaskReturn {
+  const auxiliaryReturn = buildAuxiliaryTaskReturn(plan, task, runId);
+  auxiliaryReturn.status = "failed";
+  auxiliaryReturn.verdict = "reject";
+  auxiliaryReturn.findings = [];
+  auxiliaryReturn.blockers.push(blocker);
+  auxiliaryReturn.coordinationAdvice = {
+    recommendedAction: "fallback_to_host",
+    reason: "OMA could not start this ACPX Auxiliary Task.",
   };
+  const artifactResult = writeArtifact(auxiliaryReturn);
+  if (!artifactResult.ok) {
+    auxiliaryReturn.blockers.push(`Artifact persistence failed for ${artifactResult.path}: ${artifactResult.error}`);
+  }
+  return auxiliaryReturn;
+}
+
+async function runWithConcurrency<T, R>(
+  items: T[],
+  parallelism: number,
+  worker: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(parallelism, items.length);
+
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await worker(items[currentIndex]);
+    }
+  }));
+
+  return results;
+}
+
+function buildBatchReturn(input: {
+  batchRunId: string;
+  requestedTaskIds: string[];
+  parallelism: number;
+  taskReturns: AuxiliaryTaskReturn[];
+  warnings: string[];
+  full: boolean;
+}): AuxiliaryTaskBatchReturn {
+  const acceptedCount = input.taskReturns.filter(shouldMarkTaskCompleted).length;
+  const status = acceptedCount === input.taskReturns.length
+    ? "completed"
+    : acceptedCount === 0
+      ? "failed"
+      : "partial";
+  return {
+    kind: "Auxiliary Task Batch Return",
+    status,
+    hostPlanComplete: false,
+    batchRunId: input.batchRunId,
+    requestedTaskIds: input.requestedTaskIds,
+    parallelism: input.parallelism,
+    artifactRef: `.oma/artifacts/batches/${input.batchRunId}.json`,
+    results: input.taskReturns.map((taskReturn) => ({
+      auxiliaryTaskId: taskReturn.auxiliaryTaskId,
+      status: taskReturn.status,
+      verdict: taskReturn.verdict,
+      summary: taskReturn.summary,
+      artifact: `.oma/artifacts/${taskReturn.auxiliaryTaskId}.json`,
+      coordinationAdvice: taskReturn.coordinationAdvice,
+      blockers: taskReturn.blockers,
+      ...(input.full ? { return: taskReturn } : {}),
+    })),
+    warnings: input.warnings,
+    blockers: input.taskReturns.flatMap((taskReturn) =>
+      taskReturn.blockers.map((blocker) => `${taskReturn.auxiliaryTaskId}: ${blocker}`),
+    ),
+    coordinationAdvice: status === "completed"
+      ? {
+          recommendedAction: "accept",
+          reason: "All batched Auxiliary Tasks reached provisional accept.",
+        }
+      : {
+          recommendedAction: "retry",
+          reason: "Inspect the per-task artifacts before retrying, splitting the batch, or falling back to host work.",
+        },
+  };
+}
+
+function writeBatchArtifact(
+  batchReturn: AuxiliaryTaskBatchReturn,
+  taskReturns: AuxiliaryTaskReturn[],
+): { ok: true; path: string } | { ok: false; path: string; error: string } {
+  const artifactPath = join(".oma", "artifacts", "batches", `${batchReturn.batchRunId}.json`);
+  try {
+    mkdirSync(dirname(artifactPath), { recursive: true });
+    writeFileSync(
+      artifactPath,
+      `${JSON.stringify(
+        {
+          ...batchReturn,
+          taskReturns,
+          note: "This artifact keeps batch execution detail outside the Host Agent conversation.",
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    return { ok: true, path: artifactPath };
+  } catch (error) {
+    return { ok: false, path: artifactPath, error: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 function sessionNameForRun(baseSessionName: string, runId: string): string {
@@ -891,9 +1296,14 @@ function shouldMarkTaskCompleted(auxiliaryReturn: AuxiliaryTaskReturn): boolean 
 }
 
 function markTaskCompleted(planPath: string, plan: OffloadPlan, taskId: string): void {
+  markTasksCompleted(planPath, plan, [taskId]);
+}
+
+function markTasksCompleted(planPath: string, plan: OffloadPlan, taskIds: string[]): void {
+  const completedTaskIds = new Set(taskIds);
   const updatedPlan = {
     ...plan,
-    tasks: plan.tasks.map((task) => (task.id === taskId ? { ...task, status: "completed" as const } : task)),
+    tasks: plan.tasks.map((task) => (completedTaskIds.has(task.id) ? { ...task, status: "completed" as const } : task)),
   };
   writeFileSync(planPath, `${JSON.stringify(updatedPlan, null, 2)}\n`);
 }
@@ -939,7 +1349,7 @@ async function runAcpxTask(
   execute: (command: string, args: string[], env: NodeJS.ProcessEnv) => Promise<CommandResult>,
 ): Promise<CommandResult & { command: string[]; sessionName: string; sessionShow?: CommandResult; sessionHistory?: CommandResult }> {
   const approvalFlag = permissions === "edit" ? "--approve-all" : "--approve-reads";
-  const timeout = String(timeoutSeconds ?? 180);
+  const timeout = String(timeoutSeconds ?? DEFAULT_ACPX_TIMEOUT_SECONDS);
   const ensureArgs = ["--cwd", process.cwd(), agent, "sessions", "ensure", "--name", sessionName];
   const ensureResult = await execute("acpx", ensureArgs, process.env);
   if (ensureResult.exitCode !== 0) {
@@ -1000,14 +1410,41 @@ ${fileInstructions}
 
 OMA runId: ${runId}
 
-At the end, return a schema-valid JSON object for OMA using this Auxiliary Task Return shape. The final JSON must include:
-- "kind": "Auxiliary Task Return"
-- "auxiliaryTaskId": ${JSON.stringify(auxiliaryTaskId)}
-- "runId": ${JSON.stringify(runId)}
-- "status": "completed" | "blocked" | "failed"
-- "verdict": "provisional_accept" | "revise" | "reject"
-- "hostPlanComplete": false
-- "summary", "scope", "evidence", "blockers", "findings", "followups", and "coordinationAdvice"
+At the end, return only one schema-valid JSON object for OMA. Do not wrap it in markdown fences and do not add prose before or after it.
+
+Use this exact shape:
+
+${JSON.stringify(
+  {
+    kind: "Auxiliary Task Return",
+    status: "completed",
+    verdict: "provisional_accept",
+    hostPlanComplete: false,
+    auxiliaryTaskId,
+    runId,
+    summary: "Brief result summary.",
+    scope: {
+      readFiles: [],
+      modifiedFiles: [],
+      artifactRefs: [`.oma/artifacts/${auxiliaryTaskId}.json`],
+    },
+    evidence: [
+      {
+        kind: "note",
+        summary: "Brief evidence summary.",
+      },
+    ],
+    blockers: [],
+    findings: ["Concrete finding or result."],
+    followups: [],
+    coordinationAdvice: {
+      recommendedAction: "accept",
+      reason: "Why the Host Agent can accept, retry, ask the user, spawn follow-up, or fallback to host work.",
+    },
+  },
+  null,
+  2,
+)}
 `;
 }
 
